@@ -31,12 +31,22 @@ async function bootstrap(): Promise<void> {
   console.log(`Swagger UI: http://localhost:${port}/api`);
   console.log(`Prometheus metrics: http://localhost:${port}/metrics`);
   console.log(`Admin UI: ${uiUrl}`);
+  console.log(`Grafana: http://localhost:3000 (login: admin / code: admin)`);
+
+  const shutdownMsg = [
+    'Shutting down. Services were available at:',
+    `  App:       http://localhost:${port}`,
+    `  Swagger:   http://localhost:${port}/api`,
+    `  Metrics:   http://localhost:${port}/metrics`,
+    `  Admin UI:  ${uiUrl}`,
+    `  Grafana:   http://localhost:3000 (login: admin / code: admin)`,
+  ].join('\n');
 
   process.on('SIGINT', () => {
-    console.log(`Shutting down. Admin UI was available at: ${uiUrl}`);
+    console.log(shutdownMsg);
   });
   process.on('SIGTERM', () => {
-    console.log(`Shutting down. Admin UI was available at: ${uiUrl}`);
+    console.log(shutdownMsg);
   });
 }
 
