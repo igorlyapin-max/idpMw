@@ -85,4 +85,21 @@ export class ZabbixConnectorService implements Connector {
     }
     return data.result;
   }
+
+  async testConnection(
+    config: Record<string, unknown>,
+  ): Promise<{ success: boolean; message: string }> {
+    const cfg = config as unknown as ZabbixConfig;
+    if (!cfg.baseUrl) {
+      return { success: false, message: 'Missing baseUrl in config' };
+    }
+
+    try {
+      await this.call(cfg.baseUrl, 'apiinfo.version', {});
+      return { success: true, message: 'Zabbix API reachable' };
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return { success: false, message: `Zabbix connection failed: ${msg}` };
+    }
+  }
 }

@@ -107,4 +107,21 @@ export class CmdbuildConnectorService implements Connector {
     );
     return response.data;
   }
+
+  async testConnection(
+    config: Record<string, unknown>,
+  ): Promise<{ success: boolean; message: string }> {
+    const cfg = config as unknown as CmdbuildConfig;
+    if (!cfg.baseUrl) {
+      return { success: false, message: 'Missing baseUrl in config' };
+    }
+
+    try {
+      await this.login(cfg);
+      return { success: true, message: 'CMDBuild API reachable' };
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return { success: false, message: `CMDBuild connection failed: ${msg}` };
+    }
+  }
 }

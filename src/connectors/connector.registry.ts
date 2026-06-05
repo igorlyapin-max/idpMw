@@ -60,6 +60,20 @@ export class ConnectorRegistry implements OnModuleInit {
     return this.connectors.get(name);
   }
 
+  async testConnection(
+    type: string,
+    config: Record<string, unknown>,
+  ): Promise<{ success: boolean; message: string }> {
+    const baseConnector = this.staticConnectors.get(type);
+    if (!baseConnector) {
+      return {
+        success: false,
+        message: `No connector found for type: ${type}`,
+      };
+    }
+    return baseConnector.testConnection(config);
+  }
+
   private registerStatic(connector: Connector): void {
     this.staticConnectors.set(connector.name, connector);
   }
@@ -85,6 +99,12 @@ export class ConnectorRegistry implements OnModuleInit {
             config,
           },
         });
+      },
+      testConnection: async (): Promise<{
+        success: boolean;
+        message: string;
+      }> => {
+        return baseConnector.testConnection(config);
       },
     };
   }

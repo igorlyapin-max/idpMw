@@ -34,4 +34,26 @@ export class RestConnectorService implements Connector {
       return { success: false, error: msg };
     }
   }
+
+  async testConnection(
+    config: Record<string, unknown>,
+  ): Promise<{ success: boolean; message: string }> {
+    const baseUrl = config['baseUrl'] as string | undefined;
+    if (!baseUrl) {
+      return { success: false, message: 'Missing baseUrl in config' };
+    }
+
+    try {
+      const response = await lastValueFrom(
+        this.httpService.get(baseUrl, { timeout: 10000 }),
+      );
+      return {
+        success: true,
+        message: `REST endpoint reachable (status ${response.status})`,
+      };
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return { success: false, message: `REST connection failed: ${msg}` };
+    }
+  }
 }

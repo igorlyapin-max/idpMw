@@ -4,7 +4,7 @@
 
 ## Стек
 
-- **Backend:** Node.js 20+, NestJS 10+, TypeScript strict
+- **Backend:** Node.js 20+, NestJS 11+, TypeScript strict
 - **Frontend:** React 18, Vite, TypeScript
 - **Database:** PostgreSQL 15+ (dev) / CockroachDB или YugabyteDB (prod)
 - **ORM:** Prisma
@@ -75,10 +75,10 @@ docker compose -f docker-compose.monitoring.yml up -d
 | DLQ | Хранение неуспешных событий для ручной обработки |
 | Audit | Логирование всех входящих и исходящих вызовов |
 | Dispatcher | Маршрутизация событий → коннекторы |
-| Connectors | REST, DB (SQL через knex) |
+| Connectors | REST, DB (SQL через knex), Zabbix, CMDBuild |
 | Kafka (опц.) | Async producer/consumer для масштабирования |
-| Admin API | DLQ management (`GET/POST /admin/dlq/*`) |
-| Admin UI | React-приложение для управления DLQ |
+| Admin API | DLQ management, Target Systems management |
+| Admin UI | React-приложение для управления DLQ и Target Systems |
 
 ### Feature-флаги
 
@@ -96,6 +96,7 @@ ADMIN_UI_ENABLED=true        # true для раздачи React UI
 - **AuditLog** — запись всех webhook и исходящих вызовов
 - **DlqItem** — неуспешные события (status: pending, retrying, skipped, resolved)
 - **IdempotencyKey** — ключи для deduplication
+- **TargetSystem** — конфигурация целевых систем (Zabbix, CMDBuild, REST, DB)
 
 ## Легковесный режим (SQLite)
 
@@ -166,6 +167,11 @@ MOCK_IDP_ENABLED=true
 | POST | `/admin/dlq/:id/skip` | Пропустить событие |
 | GET | `/metrics` | Prometheus метрики |
 | GET | `/api` | Swagger UI |
+| GET | `/admin/target-systems` | Список target systems |
+| POST | `/admin/target-systems` | Создать target system |
+| PATCH | `/admin/target-systems/:id` | Обновить target system |
+| DELETE | `/admin/target-systems/:id` | Удалить target system |
+| POST | `/admin/target-systems/:id/test` | Проверить связь |
 
 ## Mock IDP (dev/test)
 
@@ -232,6 +238,28 @@ tail -f /tmp/idpmw.log
 
 - При `REDIS_ENABLED=false` используется PostgreSQL advisory locks
 - Потеря кэша не критична — данные восстанавливаются из PostgreSQL
+
+## Multi-instance target systems
+
+Приложение поддерживает динамическую загрузку коннекторов из БД. Каждая запись `TargetSystem` описывает отдельный инстанс целевой системы:
+
+```bash
+# Пример: создать инстанс Zabbix
+POST /admin/target-systems
+{
+  "name": "zabbix-prod",
+  "type": "zabbix",
+  "label": "Zabbix Production",
+  "config": {
+    "baseUrl": "http://zabbix.local/api",
+    "username": "admin",
+    "code": "..."
+  },
+  "enabled": true
+}
+```
+
+Поддерживаемые типы: `zabbix`, `cmdbuild`, `rest`, `db`.
 
 ## Лицензия
 

@@ -13,4 +13,7 @@ export interface ConnectorResult {
 export interface Connector {
   readonly name: string;
   execute(payload: ConnectorPayload): Promise<ConnectorResult>;
+  testConnection(
+    config: Record<string, unknown>,
+  ): Promise<{ success: boolean; message: string }>;
 }

@@ -116,4 +116,33 @@ export class DbConnectorService
       return { success: false, error: msg };
     }
   }
+
+  async testConnection(
+    config: Record<string, unknown>,
+  ): Promise<{ success: boolean; message: string }> {
+    const client = config['client'] as string | undefined;
+    const connection = config['connection'] as string | undefined;
+    if (!client || !connection) {
+      return {
+        success: false,
+        message: 'Missing client or connection in config',
+      };
+    }
+
+    let testKnex: ReturnType<typeof import('knex').default> | undefined;
+    try {
+      testKnex = (await import('knex')).default({
+        client,
+        connection,
+        pool: { min: 1, max: 2 },
+      });
+      await testKnex.raw('SELECT 1');
+      return { success: true, message: 'DB connection OK' };
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return { success: false, message: `DB connection failed: ${msg}` };
+    } finally {
+      await testKnex?.destroy();
+    }
+  }
 }

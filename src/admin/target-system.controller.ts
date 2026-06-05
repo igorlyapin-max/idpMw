@@ -3,18 +3,21 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   Param,
   Patch,
   Post,
   Query,
 } from '@nestjs/common';
+import { ApiTags, ApiResponse, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { TargetSystemService } from './target-system.service';
-import type {
+import {
   CreateTargetSystemDto,
   UpdateTargetSystemDto,
-} from './target-system.service';
+} from './dto/target-system.dto';
 import { ConnectorRegistry } from '../connectors/connector.registry';
 
+@ApiTags('Target Systems')
 @Controller('admin/target-systems')
 export class TargetSystemController {
   constructor(
@@ -23,6 +26,11 @@ export class TargetSystemController {
   ) {}
 
   @Get()
+  @ApiOperation({ summary: 'List target systems' })
+  @ApiQuery({ name: 'type', required: false })
+  @ApiQuery({ name: 'enabled', required: false })
+  @ApiQuery({ name: 'limit', required: false })
+  @ApiQuery({ name: 'offset', required: false })
   async findAll(
     @Query('type') type?: string,
     @Query('enabled') enabled?: string,
@@ -38,11 +46,16 @@ export class TargetSystemController {
   }
 
   @Get(':id')
+  @ApiOperation({ summary: 'Get target system by ID' })
+  @ApiResponse({ status: 200, description: 'Found' })
+  @ApiResponse({ status: 404, description: 'Not found' })
   async findById(@Param('id') id: string) {
     return this.service.findById(id);
   }
 
   @Post()
+  @ApiOperation({ summary: 'Create target system' })
+  @ApiResponse({ status: 201, description: 'Created' })
   async create(@Body() dto: CreateTargetSystemDto) {
     const result = await this.service.create(dto);
     await this.registry.reload();
@@ -50,6 +63,8 @@ export class TargetSystemController {
   }
 
   @Patch(':id')
+  @ApiOperation({ summary: 'Update target system' })
+  @ApiResponse({ status: 200, description: 'Updated' })
   async update(@Param('id') id: string, @Body() dto: UpdateTargetSystemDto) {
     const result = await this.service.update(id, dto);
     await this.registry.reload();
@@ -57,6 +72,8 @@ export class TargetSystemController {
   }
 
   @Delete(':id')
+  @ApiOperation({ summary: 'Delete target system' })
+  @ApiResponse({ status: 200, description: 'Deleted' })
   async delete(@Param('id') id: string) {
     const result = await this.service.delete(id);
     await this.registry.reload();
@@ -64,6 +81,9 @@ export class TargetSystemController {
   }
 
   @Post(':id/test')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Test connection to target system' })
+  @ApiResponse({ status: 200, description: 'Test result' })
   async testConnection(@Param('id') id: string) {
     return this.service.testConnection(id);
   }
