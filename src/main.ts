@@ -24,9 +24,20 @@ async function bootstrap(): Promise<void> {
   app.enableShutdownHooks();
 
   await app.listen(port);
+  const adminUiEnabled =
+    configService.get<boolean>('ADMIN_UI_ENABLED') ?? false;
+  const uiUrl = adminUiEnabled ? `http://localhost:${port}/` : 'disabled';
   console.log(`Application is running on: http://localhost:${port}`);
   console.log(`Swagger UI: http://localhost:${port}/api`);
   console.log(`Prometheus metrics: http://localhost:${port}/metrics`);
+  console.log(`Admin UI: ${uiUrl}`);
+
+  process.on('SIGINT', () => {
+    console.log(`Shutting down. Admin UI was available at: ${uiUrl}`);
+  });
+  process.on('SIGTERM', () => {
+    console.log(`Shutting down. Admin UI was available at: ${uiUrl}`);
+  });
 }
 
 void bootstrap();
