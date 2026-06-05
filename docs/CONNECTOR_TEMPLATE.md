@@ -1,0 +1,220 @@
+# Шаблон добавления нового REST-коннектора
+
+> Время интеграции: ~10 минут
+> Живой пример: `src/connectors/implementations/fake-connector/`
+
+## Архитектура
+
+Каждый коннектор — это класс, реализующий интерфейс `Connector`:
+
+```ts
+export interface Connector {
+  readonly name: string;
+  execute(payload: ConnectorPayload): Promise<ConnectorResult>;
+  testConnection(config: Record<string, unknown>): Promise<{ success: boolean; message: string }>;
+}
+```
+
+| Метод | Назначение |
+|-------|-----------|
+| `name` | Уникальный идентификатор типа (`'fake'`, `'zabbix'` …) |
+| `execute` | Основная операция: отправка данных в целевую систему |
+| `testConnection` | Проверка доступности (используется из Admin UI) |
+
+---
+
+## Шаг 1: Создать сервис-коннектор
+
+Скопируй `fake-connector.service.ts` и адаптируй:
+
+```ts
+import { Injectable, Logger } from '@nestjs/common';
+import { HttpService } from '@nestjs/axios';
+import { lastValueFrom } from 'rxjs';
+import {
+  Connector,
+  ConnectorPayload,
+  ConnectorResult,
+} from '../../connector.interface';
+
+export interface MySystemConfig {
+  baseUrl: string;
+  apiKey?: string;
+  timeout?: number;
+}
+
+@Injectable()
+export class MySystemConnectorService implements Connector {
+  readonly name = 'my-system';
+  private readonly logger = new Logger(MySystemConnectorService.name);
+
+  constructor(private readonly httpService: HttpService) {}
+
+  async execute(payload: ConnectorPayload): Promise<ConnectorResult> {
+    const config = payload.payload['config'] as MySystemConfig | undefined;
+    if (!config?.baseUrl) {
+      return { success: false, error: 'Missing config (baseUrl)' };
+    }
+
+    try {
+      const response = await lastValueFrom(
+        this.httpService.post(
+          `${config.baseUrl}/api/users`,
+          payload.payload['data'] ?? {},
+          {
+            headers: config.apiKey
+              ? { 'X-Api-Key': config.apiKey }
+              : undefined,
+            timeout: config.timeout ?? 10000,
+          },
+        ),
+      );
+      this.logger.log(`Success: ${response.status}`);
+      return { success: true, data: response.data };
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed: ${msg}`);
+      return { success: false, error: msg };
+    }
+  }
+
+  async testConnection(
+    config: Record<string, unknown>,
+  ): Promise<{ success: boolean; message: string }> {
+    const cfg = config as unknown as MySystemConfig;
+    if (!cfg.baseUrl) {
+      return { success: false, message: 'Missing baseUrl' };
+    }
+    try {
+      const res = await lastValueFrom(
+        this.httpService.get(`${cfg.baseUrl}/health`, {
+          timeout: cfg.timeout ?? 5000,
+        }),
+      );
+      return {
+        success: true,
+        message: `Reachable (status ${res.status})`,
+      };
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return { success: false, message: `Connection failed: ${msg}` };
+    }
+  }
+}
+```
+
+**Правила:**
+- Всегда валидируй `config` перед использованием
+- Всегда оборачивай HTTP вызовы в `try/catch`
+- Возвращай понятные сообщения об ошибках
+- Не храни чувствительные данные в коде — они приходят через `config`
+
+---
+
+## Шаг 2: Зарегистрировать в модуле
+
+`src/connectors/connectors.module.ts`:
+
+```ts
+import { MySystemConnectorService } from './implementations/my-system/my-system.service';
+
+@Module({
+  imports: [HttpModule],
+  providers: [
+    ConnectorRegistry,
+    // ... другие коннекторы
+    MySystemConnectorService,
+  ],
+  exports: [ConnectorRegistry],
+})
+```
+
+---
+
+## Шаг 3: Добавить в ConnectorRegistry
+
+`src/connectors/connector.registry.ts`:
+
+```ts
+import { MySystemConnectorService } from './implementations/my-system/my-system.service';
+
+export class ConnectorRegistry implements OnModuleInit {
+  constructor(
+    // ... другие коннекторы
+    private readonly mySystemConnector: MySystemConnectorService,
+  ) {
+    // ... другие registerStatic
+    this.registerStatic(this.mySystemConnector);
+  }
+}
+```
+
+После этого `ConnectorRegistry` автоматически:
+- Создаст proxy для каждой `TargetSystem` записи с `type='my-system'`
+- Будет мержить `config` из БД в `payload` при вызове `execute`
+
+---
+
+## Шаг 4: Добавить форму в Admin UI
+
+`ui/src/pages/TargetSystemsPage.tsx`:
+
+```ts
+const TYPE_OPTIONS = ['zabbix', 'cmdbuild', 'rest', 'db', 'fake', 'my-system'];
+
+const TYPE_FIELDS: Record<string, ConfigField[]> = {
+  // ... другие типы
+  'my-system': [
+    { name: 'baseUrl', label: 'Base URL' },
+    { name: 'apiKey', label: 'API Key (optional)' },
+    { name: 'timeout', label: 'Timeout ms (optional)' },
+  ],
+};
+```
+
+---
+
+## Шаг 5: Написать unit-тест
+
+Скопируй `fake-connector.service.spec.ts` и адаптируй под свои endpoints.
+
+---
+
+## Шаг 6: Создать TargetSystem через Admin API
+
+```bash
+curl -X POST http://localhost:3010/admin/target-systems \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "my-system-prod",
+    "type": "my-system",
+    "label": "My System Production",
+    "config": {
+      "baseUrl": "https://api.mysystem.local",
+      "apiKey": "replace-me",
+      "timeout": 15000
+    },
+    "enabled": true
+  }'
+```
+
+Или через Admin UI: `http://localhost:3010/` → Target Systems → Create.
+
+---
+
+## Проверка
+
+```bash
+# 1. Валидация
+npm run validate
+
+# 2. Unit тесты
+npm test -- my-system
+
+# 3. Проверка связи
+POST /admin/target-systems/:id/test
+
+# 4. E2E отправка события
+POST /webhooks/avanpost \
+  -d '{"eventId":"test-1","operation":"user.create","targetSystem":"my-system-prod","payload":{"data":{"name":"John"}}}'
+```

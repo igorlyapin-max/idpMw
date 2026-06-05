@@ -5,6 +5,7 @@ import { RestConnectorService } from './implementations/rest-connector/rest-conn
 import { DbConnectorService } from './implementations/db-connector/db-connector.service';
 import { ZabbixConnectorService } from './implementations/zabbix-connector/zabbix-connector.service';
 import { CmdbuildConnectorService } from './implementations/cmdbuild-connector/cmdbuild-connector.service';
+import { FakeConnectorService } from './implementations/fake-connector/fake-connector.service';
 
 describe('ConnectorRegistry', () => {
   let registry: ConnectorRegistry;
@@ -29,6 +30,11 @@ describe('ConnectorRegistry', () => {
     execute: jest.Mock;
     testConnection: jest.Mock;
   };
+  let fakeConnector: {
+    name: string;
+    execute: jest.Mock;
+    testConnection: jest.Mock;
+  };
 
   beforeEach(async () => {
     prisma = { targetSystem: { findMany: jest.fn() } };
@@ -48,6 +54,11 @@ describe('ConnectorRegistry', () => {
       execute: jest.fn(),
       testConnection: jest.fn(),
     };
+    fakeConnector = {
+      name: 'fake',
+      execute: jest.fn(),
+      testConnection: jest.fn(),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -57,6 +68,7 @@ describe('ConnectorRegistry', () => {
         { provide: DbConnectorService, useValue: dbConnector },
         { provide: ZabbixConnectorService, useValue: zabbixConnector },
         { provide: CmdbuildConnectorService, useValue: cmdbuildConnector },
+        { provide: FakeConnectorService, useValue: fakeConnector },
       ],
     }).compile();
 
@@ -76,6 +88,7 @@ describe('ConnectorRegistry', () => {
       ]);
       await registry.reload();
       expect(registry.get('zabbix')).toBeDefined();
+      expect(registry.get('fake')).toBeDefined();
       expect(registry.get('z1')).toBeDefined();
     });
 

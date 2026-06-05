@@ -8,7 +8,7 @@ import {
   type TargetSystem,
 } from '../api/client';
 
-const TYPE_OPTIONS = ['zabbix', 'cmdbuild', 'rest', 'db'];
+const TYPE_OPTIONS = ['zabbix', 'cmdbuild', 'rest', 'db', 'fake'];
 
 interface ConfigField {
   name: string;
@@ -34,6 +34,11 @@ const TYPE_FIELDS: Record<string, ConfigField[]> = {
   db: [
     { name: 'client', label: 'Dialect (pg | mysql2 | sqlite3)' },
     { name: 'connection', label: 'Connection String' },
+  ],
+  fake: [
+    { name: 'baseUrl', label: 'Base URL' },
+    { name: 'apiKey', label: 'API Key (optional)' },
+    { name: 'timeout', label: 'Timeout ms (optional)' },
   ],
 };
 

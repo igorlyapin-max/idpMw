@@ -5,6 +5,7 @@ import { RestConnectorService } from './implementations/rest-connector/rest-conn
 import { DbConnectorService } from './implementations/db-connector/db-connector.service';
 import { ZabbixConnectorService } from './implementations/zabbix-connector/zabbix-connector.service';
 import { CmdbuildConnectorService } from './implementations/cmdbuild-connector/cmdbuild-connector.service';
+import { FakeConnectorService } from './implementations/fake-connector/fake-connector.service';
 
 @Module({
   imports: [HttpModule],
@@ -14,6 +15,7 @@ import { CmdbuildConnectorService } from './implementations/cmdbuild-connector/c
     DbConnectorService,
     ZabbixConnectorService,
     CmdbuildConnectorService,
+    FakeConnectorService,
   ],
   exports: [ConnectorRegistry],
 })

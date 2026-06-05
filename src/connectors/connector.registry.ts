@@ -8,6 +8,7 @@ import { RestConnectorService } from './implementations/rest-connector/rest-conn
 import { DbConnectorService } from './implementations/db-connector/db-connector.service';
 import { ZabbixConnectorService } from './implementations/zabbix-connector/zabbix-connector.service';
 import { CmdbuildConnectorService } from './implementations/cmdbuild-connector/cmdbuild-connector.service';
+import { FakeConnectorService } from './implementations/fake-connector/fake-connector.service';
 import { PrismaService } from '../database/prisma.service';
 
 @Injectable()
@@ -22,11 +23,13 @@ export class ConnectorRegistry implements OnModuleInit {
     private readonly dbConnector: DbConnectorService,
     private readonly zabbixConnector: ZabbixConnectorService,
     private readonly cmdbuildConnector: CmdbuildConnectorService,
+    private readonly fakeConnector: FakeConnectorService,
   ) {
     this.registerStatic(this.restConnector);
     this.registerStatic(this.dbConnector);
     this.registerStatic(this.zabbixConnector);
     this.registerStatic(this.cmdbuildConnector);
+    this.registerStatic(this.fakeConnector);
   }
 
   async onModuleInit(): Promise<void> {
@@ -47,7 +50,7 @@ export class ConnectorRegistry implements OnModuleInit {
       const proxy = this.createProxy(
         ts.type,
         ts.name,
-        ts.config as Record<string, unknown>,
+        ts.config as unknown as Record<string, unknown>,
       );
       if (proxy) {
         this.connectors.set(ts.name, proxy);
