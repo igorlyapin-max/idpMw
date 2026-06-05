@@ -5,14 +5,11 @@ import { IndeedPamAapmClient } from './indeed-pam-aapm.client';
 
 describe('SecretResolverService', () => {
   let service: SecretResolverService;
-  let pamClient: jest.Mocked<IndeedPamAapmClient>;
+  let pamClient: { getValue: jest.Mock };
   let configGet: jest.Mock;
 
   beforeEach(async () => {
-    pamClient = {
-      getValue: jest.fn(),
-    } as unknown as jest.Mocked<IndeedPamAapmClient>;
-
+    pamClient = { getValue: jest.fn() };
     configGet = jest.fn();
 
     const module: TestingModule = await Test.createTestingModule({
@@ -48,7 +45,7 @@ describe('SecretResolverService', () => {
 
     await service.resolveAll();
 
-    expect(pamClient.getValue).toHaveBeenCalledWith('Test.Account');
+    expect(pamClient.getValue.mock.calls).toEqual([['Test.Account']]);
     expect(process.env['TEST_VAR']).toBe('resolved-value');
   });
 
@@ -60,7 +57,7 @@ describe('SecretResolverService', () => {
 
     await service.resolveAll();
 
-    expect(pamClient.getValue).toHaveBeenCalledTimes(1);
+    expect(pamClient.getValue.mock.calls.length).toBe(1);
     expect(process.env['VAR1']).toBe('cached-value');
     expect(process.env['VAR2']).toBe('cached-value');
   });

@@ -47,3 +47,16 @@ model IdempotencyKey {
 
   @@index([expiresAt])
 }
+
+model TargetSystem {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  type      String
+  label     String
+  config    String
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([type, enabled])
+}
