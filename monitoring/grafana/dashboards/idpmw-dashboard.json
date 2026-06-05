@@ -1,0 +1,70 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "idpMw Dashboard",
+    "tags": ["idpmw"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "HTTP Requests/sec",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(idpmw_http_requests_total[1m])",
+            "legendFormat": "{{method}} {{route}}"
+          }
+        ],
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
+      },
+      {
+        "id": 2,
+        "title": "HTTP Latency (p95)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(idpmw_http_request_duration_seconds_bucket[1m]))",
+            "legendFormat": "{{method}} {{route}}"
+          }
+        ],
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+      },
+      {
+        "id": 3,
+        "title": "DLQ Size",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "idpmw_dlq_size",
+            "legendFormat": "{{status}}"
+          }
+        ],
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 }
+      },
+      {
+        "id": 4,
+        "title": "Events Processed",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(idpmw_events_processed_total[1m])",
+            "legendFormat": "{{status}}"
+          }
+        ],
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 }
+      },
+      {
+        "id": 5,
+        "title": "Connector Errors",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(idpmw_connector_errors_total[1m])",
+            "legendFormat": "{{connector}} {{operation}}"
+          }
+        ],
+        "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 }
+      }
+    ]
+  }
+}

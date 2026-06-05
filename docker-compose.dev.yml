@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: idpmw-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: idpmw
+      POSTGRES_PASSWORD: idpmw_dev
+      POSTGRES_DB: idpmw
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U idpmw -d idpmw"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

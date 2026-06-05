@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.yarn/cache
+
+# Build artifacts
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Generated files
+/generated/prisma/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+
+# Local dev / agent tooling
+.omk/
+.kimi/runs/
+
+# Docker volumes
+docker-volumes/
