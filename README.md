@@ -97,6 +97,31 @@ ADMIN_UI_ENABLED=true        # true для раздачи React UI
 - **DlqItem** — неуспешные события (status: pending, retrying, skipped, resolved)
 - **IdempotencyKey** — ключи для deduplication
 
+## Легковесный режим (SQLite)
+
+Для dev и маленьких инсталляций доступен режим на SQLite — без PostgreSQL, Redis, Kafka:
+
+```bash
+# Настройка SQLite (один раз)
+npm run db:setup:sqlite
+
+# Запуск в lightweight режиме
+npm run dev:sqlite
+```
+
+Переменные окружения для SQLite:
+```env
+LIGHTWEIGHT_MODE=true
+DATABASE_PROVIDER=sqlite
+DATABASE_URL=file:./data/idpmw.db
+```
+
+В lightweight режиме:
+- База данных — SQLite (файл `data/idpmw.db`)
+- Kafka и Redis автоматически отключены
+- Single worker (no clustering)
+- JSON поля хранятся как сериализованные строки
+
 ## Env-переменные
 
 ```env

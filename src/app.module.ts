@@ -13,6 +13,8 @@ import { AdminModule } from './admin/admin.module';
 import { MetricsModule } from './metrics/metrics.module';
 import { HttpMetricsMiddleware } from './metrics/http-metrics.middleware';
 
+const isLightweight = process.env['LIGHTWEIGHT_MODE'] === 'true';
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -38,7 +40,7 @@ import { HttpMetricsMiddleware } from './metrics/http-metrics.middleware';
     HealthModule,
     MockIdpModule,
     WebhooksModule,
-    KafkaModule,
+    ...(isLightweight ? [] : [KafkaModule]),
     AdminModule,
     MetricsModule,
     ServeStaticModule.forRootAsync({

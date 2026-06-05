@@ -1,0 +1,49 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  eventId      String   @unique
+  source       String
+  operation    String
+  targetSystem String
+  payload      String
+  response     String?
+  status       String
+  errorMessage String?
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([eventId])
+  @@index([targetSystem, operation])
+}
+
+model DlqItem {
+  id           String   @id @default(uuid())
+  eventId      String
+  operation    String
+  targetSystem String
+  payload      String
+  error        String
+  retryCount   Int      @default(0)
+  status       String   @default("pending")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@index([eventId])
+}
+
+model IdempotencyKey {
+  key       String   @id
+  lockedAt  DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}

@@ -5,16 +5,19 @@ import {
   Logger,
   NestInterceptor,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import { Observable, catchError, tap } from 'rxjs';
 import { PrismaService } from '../../database/prisma.service';
+import { JsonHelper } from '../../database/json.helper';
 import type { Request } from 'express';
 
 @Injectable()
 export class AuditInterceptor implements NestInterceptor {
   private readonly logger = new Logger(AuditInterceptor.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jsonHelper: JsonHelper,
+  ) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     const request = context.switchToHttp().getRequest<Request>();
@@ -35,12 +38,14 @@ export class AuditInterceptor implements NestInterceptor {
               source: 'avanpost',
               operation,
               targetSystem,
-              payload: {
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+              payload: this.jsonHelper.toJson({
                 request: body,
                 method,
                 url,
-              } as unknown as Prisma.InputJsonValue,
-              response: { response } as unknown as Prisma.InputJsonValue,
+              }) as any,
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+              response: this.jsonHelper.toJson({ response }) as any,
               status: 'success',
             },
           })
@@ -62,11 +67,12 @@ export class AuditInterceptor implements NestInterceptor {
               source: 'avanpost',
               operation,
               targetSystem,
-              payload: {
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+              payload: this.jsonHelper.toJson({
                 request: body,
                 method,
                 url,
-              } as unknown as Prisma.InputJsonValue,
+              }) as any,
               status: 'error',
               errorMessage: err.message,
             },

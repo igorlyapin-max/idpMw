@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
+import { JsonHelper } from '../database/json.helper';
 import { DlqService } from '../core/dlq/dlq.service';
 import { KafkaProducerService } from '../kafka/kafka-producer.service';
 import { MetricsService } from '../metrics/metrics.service';
@@ -8,6 +9,7 @@ import { MetricsService } from '../metrics/metrics.service';
 export class AdminService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly jsonHelper: JsonHelper,
     private readonly dlq: DlqService,
     private readonly kafkaProducer: KafkaProducerService,
     private readonly metrics: MetricsService,
@@ -44,7 +46,7 @@ export class AdminService {
         eventId: item.eventId,
         operation: item.operation,
         targetSystem: item.targetSystem,
-        payload: item.payload,
+        payload: this.jsonHelper.fromJson(item.payload),
       });
     }
     await this.updateDlqMetrics();

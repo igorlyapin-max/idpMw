@@ -6,6 +6,11 @@ export const appConfigSchema = z.object({
     .default('development'),
   PORT: z.string().transform(Number).default(3000),
   DATABASE_URL: z.string().min(1),
+  DATABASE_PROVIDER: z.enum(['postgresql', 'sqlite']).default('postgresql'),
+  LIGHTWEIGHT_MODE: z
+    .string()
+    .transform((v) => v === 'true')
+    .default(false),
 
   REDIS_ENABLED: z
     .string()

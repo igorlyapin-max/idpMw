@@ -36,3 +36,8 @@ pnpm-debug.log*
 
 # Docker volumes
 docker-volumes/
+
+# SQLite
+data/
+*.db
+*.db-journal

@@ -1,6 +1,6 @@
-import { Prisma } from '@prisma/client';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
+import { JsonHelper } from '../../database/json.helper';
 
 export interface DlqItemData {
   eventId: string;
@@ -15,7 +15,10 @@ export interface DlqItemData {
 export class DlqService {
   private readonly logger = new Logger(DlqService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jsonHelper: JsonHelper,
+  ) {}
 
   async add(item: DlqItemData): Promise<void> {
     await this.prisma.dlqItem.create({
@@ -23,7 +26,8 @@ export class DlqService {
         eventId: item.eventId,
         operation: item.operation,
         targetSystem: item.targetSystem,
-        payload: item.payload as unknown as Prisma.InputJsonValue,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        payload: this.jsonHelper.toJson(item.payload) as any,
         error: item.error,
         retryCount: item.retryCount ?? 0,
         status: 'pending',
