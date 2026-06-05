@@ -49,7 +49,7 @@ describe('FakeConnectorService', () => {
         'http://fake/api/echo',
         expect.objectContaining({ operation: 'create' }),
         expect.objectContaining({
-          headers: { 'Content-Type': 'application/json', 'X-Api-Key': 'k123' },
+          headers: { 'Content-Type': 'application/json', 'X-Api-Id': 'k123' },
         }),
       );
     });

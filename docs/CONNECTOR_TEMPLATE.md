@@ -5,6 +5,85 @@
 
 ## Архитектура
 
+### Полный flow от webhook до коннектора
+
+```
+Avanpost IDM
+     │
+     ▼
+POST /webhooks/avanpost  (WebhookController)
+     │
+     ▼
+WebhookService.processWebhook()
+     │
+     ├── idempotency check (deduplication by eventId)
+     │
+     ▼
+DispatcherService.dispatch()
+     │
+     ├── ProcessingService.process()  (retry logic)
+     │       │
+     │       ▼
+     │   ConnectorRegistry.get(targetSystem)
+     │       │
+     │       ├── static connector (legacy mode)
+     │       └── proxy ──► static connector + DB config
+     │               │
+     │               ▼
+     │        Concrete Connector (zabbix, cmdbuild, fake, …)
+     │               │
+     │               ▼
+     │        HTTP request with config from payload
+     │
+     ▼
+Kafka event (optional, if KAFKA_ENABLED=true)
+```
+
+### Как проносятся настройки подключения
+
+1. **Admin** создаёт `TargetSystem` через UI/API, заполняя поле `config` JSON-объектом с параметрами подключения (baseUrl, таймауты, ключи доступа).
+
+2. **ConnectorRegistry** при старте (или после reload) создаёт `proxy` для каждой записи из БД. Proxy оборачивает статический коннектор и при вызове `execute()` мержит `config` из БД в `payload.config`.
+
+3. **ProcessingService** вызывает `connector.execute()`:
+   ```ts
+   connector.execute({
+     operation: 'host.create',
+     targetSystem: 'zabbix-prod',
+     payload: {
+       data: { ... },
+       config: { baseUrl: '...', timeout: 15000 }  // ← из БД
+     }
+   })
+   ```
+
+4. **Конкретный коннектор** читает `payload.config` и строит HTTP запрос. Поля config используются для URL, заголовков, таймаутов.
+
+**Важно:** параметры подключения никогда не хранятся в коде коннектора. Они приходят через `payload.config`, который заполняется в Admin UI и хранится в БД.
+
+### Как мапятся operations
+
+`operation` из webhook передаётся **as-is** через всю цепочку:
+
+```
+Webhook:  { operation: 'user.create', ... }
+              │
+              ▼
+Dispatcher ──► ProcessingService.process({ operation: 'user.create' })
+              │
+              ▼
+Connector ──► execute({ operation: 'user.create', ... })
+```
+
+Каждый коннектор сам решает, как интерпретировать `operation`:
+- **Zabbix** — передаёт как `method` в Zabbix API
+- **CMDBuild** — использует `switch(operation)` для выбора URL/method
+- **Fake/REST** — может игнорировать или логировать operation
+
+---
+
+## Интерфейс Connector
+
 Каждый коннектор — это класс, реализующий интерфейс `Connector`:
 
 ```ts
