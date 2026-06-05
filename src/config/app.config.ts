@@ -39,6 +39,8 @@ export const appConfigSchema = z.object({
     .string()
     .transform((v) => v === 'true')
     .default(false),
+
+  SECRETS_PROVIDER: z.enum(['None', 'IndeedPamAapm']).default('None'),
 });
 
 export type AppConfig = z.infer<typeof appConfigSchema>;

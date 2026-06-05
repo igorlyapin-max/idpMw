@@ -5,6 +5,7 @@ import { join } from 'path';
 import { LoggerModule } from 'nestjs-pino';
 import { appConfigSchema } from './config/app.config';
 import { PrismaModule } from './database/prisma.module';
+import { SecretsModule } from './secrets/secrets.module';
 import { HealthModule } from './health/health.module';
 import { MockIdpModule } from './mock-idp/mock-idp.module';
 import { WebhooksModule } from './inbound/webhooks/webhooks.module';
@@ -12,6 +13,9 @@ import { KafkaModule } from './kafka/kafka.module';
 import { AdminModule } from './admin/admin.module';
 import { MetricsModule } from './metrics/metrics.module';
 import { HttpMetricsMiddleware } from './metrics/http-metrics.middleware';
+import { applyPamCompatibility } from './secrets/legacy-compat';
+
+applyPamCompatibility();
 
 const isLightweight = process.env['LIGHTWEIGHT_MODE'] === 'true';
 
@@ -36,6 +40,7 @@ const isLightweight = process.env['LIGHTWEIGHT_MODE'] === 'true';
             : undefined,
       },
     }),
+    SecretsModule,
     PrismaModule,
     HealthModule,
     MockIdpModule,

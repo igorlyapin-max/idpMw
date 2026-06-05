@@ -236,3 +236,44 @@ tail -f /tmp/idpmw.log
 ## Лицензия
 
 UNLICENSED
+
+## Управление секретами (Indeed PAM AAPM)
+
+Для production-инсталляций рекомендуется использовать внешнее хранилище секретов вместо env-переменных.
+
+### Конфигурация
+
+```env
+SECRETS_PROVIDER=IndeedPamAapm
+SECRETS_INDEEDPAMAAPM_BASEURL=https://pam.company.local
+SECRETS_INDEEDPAMAAPM_APPLICATIONTOKEN=app-token
+# или
+SECRETS_INDEEDPAMAAPM_APPLICATIONUSERNAME=app-user
+SECRETS_INDEEDPAMAAPM_APPLICATIONPASSWORD=app-pass
+SECRETS_INDEEDPAMAAPM_DEFAULTACCOUNTPATH=default/path
+```
+
+### Формат ссылок
+
+В значениях env-переменных можно использовать PAM-ссылки:
+
+```env
+ZABBIX_PASSWORD=secret://Zabbix.ProdPass
+CMDBUILD_PASSWORD=aapm://CMDBuild/ProdPass
+```
+
+При старте приложения `SecretResolverService` автоматически резолвит ссылки через Indeed PAM AAPM API.
+
+### Legacy env vars (совместимость с ad2cmdb)
+
+Поддерживаются legacy переменные из ad2cmdb:
+
+```env
+PAMURL=https://pam.company.local
+PAMTOKEN=app-token
+PAMUSERNAME=app-user
+PAMPASSWORD=app-pass
+PAMDEFAULTACCOUNTPATH=default/path
+```
+
+Если любая из `PAM*` переменных установлена, `SECRETS_PROVIDER` автоматически устанавливается в `IndeedPamAapm`.
