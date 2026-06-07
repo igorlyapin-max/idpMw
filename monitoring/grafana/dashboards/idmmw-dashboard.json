@@ -1,8 +1,8 @@
 {
   "dashboard": {
     "id": null,
-    "title": "idpMw Dashboard",
-    "tags": ["idpmw"],
+    "title": "idmMw Dashboard",
+    "tags": ["idmmw"],
     "timezone": "browser",
     "panels": [
       {
@@ -11,7 +11,7 @@
         "type": "graph",
         "targets": [
           {
-            "expr": "rate(idpmw_http_requests_total[1m])",
+            "expr": "rate(idmmw_http_requests_total[1m])",
             "legendFormat": "{{method}} {{route}}"
           }
         ],
@@ -23,7 +23,7 @@
         "type": "graph",
         "targets": [
           {
-            "expr": "histogram_quantile(0.95, rate(idpmw_http_request_duration_seconds_bucket[1m]))",
+            "expr": "histogram_quantile(0.95, rate(idmmw_http_request_duration_seconds_bucket[1m]))",
             "legendFormat": "{{method}} {{route}}"
           }
         ],
@@ -35,7 +35,7 @@
         "type": "graph",
         "targets": [
           {
-            "expr": "idpmw_dlq_size",
+            "expr": "idmmw_dlq_size",
             "legendFormat": "{{status}}"
           }
         ],
@@ -47,7 +47,7 @@
         "type": "graph",
         "targets": [
           {
-            "expr": "rate(idpmw_events_processed_total[1m])",
+            "expr": "rate(idmmw_events_processed_total[1m])",
             "legendFormat": "{{status}}"
           }
         ],
@@ -59,7 +59,7 @@
         "type": "graph",
         "targets": [
           {
-            "expr": "rate(idpmw_connector_errors_total[1m])",
+            "expr": "rate(idmmw_connector_errors_total[1m])",
             "legendFormat": "{{connector}} {{operation}}"
           }
         ],

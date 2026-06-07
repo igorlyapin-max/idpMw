@@ -75,6 +75,7 @@ export class DispatcherService {
           error: msg,
         });
       }
+      throw error;
     }
   }
 }

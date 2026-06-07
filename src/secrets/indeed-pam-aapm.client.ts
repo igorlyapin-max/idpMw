@@ -64,7 +64,7 @@ export class IndeedPamAapmClient {
       comment:
         this.value(`SECRETS_REFERENCES_${this.sanitizeKey(refId)}_COMMENT`) ??
         this.value('SECRETS_INDEEDPAMAAPM_COMMENT') ??
-        `idpMw ${refId}`,
+        `idmMw ${refId}`,
       tenantid:
         this.value(`SECRETS_REFERENCES_${this.sanitizeKey(refId)}_TENANTID`) ??
         this.value('SECRETS_INDEEDPAMAAPM_TENANTID'),

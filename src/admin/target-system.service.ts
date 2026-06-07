@@ -47,6 +47,15 @@ export class TargetSystemService {
     };
   }
 
+  async findByName(name: string) {
+    const item = await this.prisma.targetSystem.findUnique({ where: { name } });
+    if (!item) return null;
+    return {
+      ...item,
+      config: this.jsonHelper.fromJson<Record<string, unknown>>(item.config),
+    };
+  }
+
   async create(dto: CreateTargetSystemDto) {
     return this.prisma.targetSystem.create({
       data: {

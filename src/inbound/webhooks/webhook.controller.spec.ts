@@ -3,18 +3,22 @@ import { WebhookController } from './webhook.controller';
 import { WebhookService } from './webhook.service';
 import { PrismaService } from '../../database/prisma.service';
 import { JsonHelper } from '../../database/json.helper';
+import { DiagnosticLoggerService } from '../../diagnostics/diagnostic-logger.service';
 
 describe('WebhookController', () => {
   let controller: WebhookController;
   let service: { processWebhook: jest.Mock };
+  let diagnostics: { basic: jest.Mock; verbose: jest.Mock };
 
   beforeEach(async () => {
     service = { processWebhook: jest.fn() };
+    diagnostics = { basic: jest.fn(), verbose: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [WebhookController],
       providers: [
         { provide: WebhookService, useValue: service },
+        { provide: DiagnosticLoggerService, useValue: diagnostics },
         { provide: PrismaService, useValue: {} },
         { provide: JsonHelper, useValue: {} },
       ],
@@ -23,15 +27,40 @@ describe('WebhookController', () => {
     controller = module.get<WebhookController>(WebhookController);
   });
 
-  it('should receive and process webhook', async () => {
-    service.processWebhook.mockResolvedValue(true);
+  it('should receive and process write webhook', async () => {
+    service.processWebhook.mockResolvedValue({ processed: true });
     const result = await controller.receiveWebhook({
       eventId: 'e1',
-      operation: 'create',
+      operation: 'user.create',
       targetSystem: 'zabbix',
       payload: {},
     });
     expect(result.received).toBe(true);
     expect(result.processed).toBe(true);
+    expect(result.data).toBeUndefined();
+    expect(diagnostics.basic).toHaveBeenCalledWith(
+      'idm.webhook.received',
+      expect.objectContaining({ mode: 'write' }),
+    );
+  });
+
+  it('should receive and process read webhook with data', async () => {
+    service.processWebhook.mockResolvedValue({
+      processed: true,
+      data: { id: 'user-1' },
+    });
+    const result = await controller.receiveWebhook({
+      eventId: 'e1',
+      operation: 'user.get',
+      targetSystem: 'zabbix',
+      payload: {},
+    });
+    expect(result.received).toBe(true);
+    expect(result.processed).toBe(true);
+    expect(result.data).toEqual({ id: 'user-1' });
+    expect(diagnostics.basic).toHaveBeenCalledWith(
+      'idm.webhook.received',
+      expect.objectContaining({ mode: 'read' }),
+    );
   });
 });

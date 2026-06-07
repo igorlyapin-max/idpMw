@@ -83,7 +83,7 @@ export class AuditInterceptor implements NestInterceptor {
           .catch(() => {
             // ignore audit write errors
           });
-        throw new Error(err.message);
+        throw error;
       }),
     );
   }

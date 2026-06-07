@@ -1,4 +1,4 @@
-# idpMw — Middleware для Avanpost IDM 7.8
+# idmMw — Middleware для Avanpost IDM 7.8
 
 Промежуточный слой (integration hub) между Avanpost IDM 7.8 и целевыми системами. Обеспечивает идемпотентность, retry с экспоненциальным backoff, DLQ (Dead Letter Queue), audit log и административный UI.
 
@@ -8,10 +8,10 @@
 - **Frontend:** React 18, Vite, TypeScript
 - **Database:** PostgreSQL 15+ (dev) / CockroachDB или YugabyteDB (prod)
 - **ORM:** Prisma
-- **Cache/Lock (опц.):** Redis 7+ (Sentinel в prod)
+- **Cache/Lock:** PostgreSQL idempotency store; Redis зарезервирован, но не реализован в текущей сборке
 - **Message Bus (опц.):** Apache Kafka 3.x
 - **Monitoring:** Prometheus + Grafana
-- **Logging:** pino (JSON)
+- **Logging:** pino (JSON) в stdout/stderr, опционально второй sink в JSON log file
 
 ## Быстрый старт
 
@@ -67,28 +67,85 @@ docker compose -f docker-compose.monitoring.yml up -d
 
 ### Компоненты
 
-| Компонент | Описание |
-|-----------|----------|
-| Webhook Controller | Приём событий от Avanpost IDM (`POST /webhooks/avanpost`) |
-| Idempotency | Предотвращение дубликатов (Redis / PostgreSQL fallback) |
-| Retry | Экспоненциальный backoff, max 3 попытки |
-| DLQ | Хранение неуспешных событий для ручной обработки |
-| Audit | Логирование всех входящих и исходящих вызовов |
-| Dispatcher | Маршрутизация событий → коннекторы |
-| Connectors | REST, DB (SQL через knex), Zabbix, CMDBuild |
-| Kafka (опц.) | Async producer/consumer для масштабирования |
-| Admin API | DLQ management, Target Systems management |
-| Admin UI | React-приложение для управления DLQ и Target Systems |
+| Компонент          | Описание                                                    |
+| ------------------ | ----------------------------------------------------------- |
+| Webhook Controller | Приём событий от Avanpost IDM (`POST /webhooks/avanpost`)   |
+| Idempotency        | Предотвращение дубликатов через PostgreSQL `IdempotencyKey` |
+| Retry              | Экспоненциальный backoff, max 3 попытки                     |
+| DLQ                | Хранение неуспешных событий для ручной обработки            |
+| Audit              | Логирование всех входящих и исходящих вызовов               |
+| Dispatcher         | Маршрутизация событий → коннекторы                          |
+| Connectors         | REST, DB (SQL через knex), Zabbix, CMDBuild                 |
+| Kafka (опц.)       | Async producer/consumer для масштабирования                 |
+| Admin API          | DLQ management, Target Systems management                   |
+| Admin UI           | React-приложение для управления DLQ и Target Systems        |
+
+### IDM multi-target contract
+
+Avanpost IDM взаимодействует с одним endpoint микросервиса:
+
+```text
+POST /webhooks/avanpost
+```
+
+Один запрос адресован одной целевой системе. Для работы с несколькими системами IDM отправляет несколько запросов в тот же endpoint, меняя `targetSystem` и используя уникальный `eventId` на пару бизнес-событие + целевая система:
+
+```json
+{
+  "eventId": "idm-1001:zabbix-prod",
+  "operation": "user.create",
+  "targetSystem": "zabbix-prod",
+  "payload": {
+    "data": {
+      "username": "ivanov"
+    }
+  }
+}
+```
+
+`targetSystem` должен совпадать либо со static connector name (`fake`, `rest`, `db`, `zabbix`, `cmdbuild`), либо с `TargetSystem.name` из БД (`zabbix-prod`, `cmdbuild-prod`, `portal-hr`).
+
+Для явной проверки доступных систем middleware отдаёт IDM-facing catalog:
+
+```text
+GET /idm/target-systems
+GET /idm/target-systems/:name
+```
+
+Каталог содержит только включённые `TargetSystem` из БД, которые доступны через `ConnectorRegistry`. В ответе нет `config`, токенов, паролей и других секретов. Для каждой системы возвращаются `operations`, `readOperations`, `writeOperations`, `capabilities`, `operationStatus` и `partialOperations`, если часть операций реализована с ограниченной семантикой. Это не автоматический service discovery Avanpost IDM: IDM по-прежнему вызывает один endpoint middleware, а список используется как контракт/справочник для настройки нескольких систем за одним микросервисом.
+
+Поддерживаемые IDM operations:
+
+```text
+user.create, user.update, user.delete, user.get, user.search,
+user.enable, user.disable, user.lock, user.unlock, user.changePassword,
+user.resolve, user.addAttributes, user.removeAttributes,
+group.create, group.update, group.delete, group.get, group.search,
+group.addMember, group.removeMember,
+system.test, schema.get, sync.full, sync.incremental
+```
+
+Response semantics:
+
+| Тип операции                                                                      | Поведение                                                                                                                                                                                                                                       |
+| --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Write (`user.create`, `group.addMember`, ...)                                     | Возвращает `received=true`, `processed=true`, без `data`. Если коннектор вернул сбой после retry, событие уходит в DLQ и запрос считается принятым. Системные ошибки маршрутизации, например неизвестный `targetSystem`, возвращают HTTP error. |
+| Read/test/sync (`user.get`, `user.search`, `system.test`, `schema.get`, `sync.*`) | Возвращает `received=true`, `processed=true`, `data` с результатом целевой системы. При ошибке возвращается HTTP error, без DLQ/retry.                                                                                                          |
+| Duplicate `eventId`                                                               | Возвращает `received=true`, `processed=false`; dispatch в целевую систему не выполняется.                                                                                                                                                       |
 
 ### Feature-флаги
 
 Все опциональные компоненты управляются через env-переменные:
 
 ```env
-REDIS_ENABLED=false          # true для Redis cache/lock
+REDIS_ENABLED=false          # true запрещён до реализации Redis store
 KAFKA_ENABLED=false          # true для async messaging
 DB_CONNECTOR_ENABLED=false   # true для SQL-коннектора
 ADMIN_UI_ENABLED=true        # true для раздачи React UI
+DebugLogging__Enabled=false  # true для diagnostic logging
+DebugLogging__Level=Basic    # Basic | Verbose
+LOG_SINK=stdout              # stdout | file
+LOG_FILE_PATH=/tmp/idmmw.log # используется при LOG_SINK=file
 ```
 
 ### Модель данных (Prisma)
@@ -111,14 +168,16 @@ npm run dev:sqlite
 ```
 
 Переменные окружения для SQLite:
+
 ```env
 LIGHTWEIGHT_MODE=true
 DATABASE_PROVIDER=sqlite
-DATABASE_URL=file:./data/idpmw.db
+DATABASE_URL=file:./data/idmmw.db
 ```
 
 В lightweight режиме:
-- База данных — SQLite (файл `data/idpmw.db`)
+
+- База данных — SQLite (файл `data/idmmw.db`)
 - Kafka и Redis автоматически отключены
 - Single worker (no clustering)
 - JSON поля хранятся как сериализованные строки
@@ -134,7 +193,7 @@ NODE_ENV=development
 DATABASE_URL=postgresql://user:pass@host:port/db
 
 # Redis (опционально)
-REDIS_ENABLED=false
+REDIS_ENABLED=false          # true сейчас запрещён: Redis store не реализован
 REDIS_HOST=localhost
 REDIS_PORT=6379
 # REDIS_SENTINEL_HOSTS=redis1:26379,redis2:26379,redis3:26379  # prod only
@@ -152,38 +211,54 @@ DB_CONNECTOR_DIALECT=pg          # pg | mysql2 | sqlite3
 ADMIN_UI_ENABLED=true
 ADMIN_UI_SERVE_STATIC=true
 
-# Mock IDP (только dev/test)
-MOCK_IDP_ENABLED=true
+# Mock IDM (только dev/test)
+MOCK_IDM_ENABLED=true
+
+# Diagnostic logging
+DebugLogging__Enabled=false
+DebugLogging__Level=Basic    # Basic | Verbose
+LOG_SINK=stdout              # stdout | file
+LOG_FILE_PATH=/tmp/idmmw.log
 ```
 
 ## API Endpoints
 
-| Метод | Путь | Описание |
-|-------|------|----------|
-| GET | `/health` | Health check (DB, Redis, Kafka) |
-| POST | `/webhooks/avanpost` | Приём событий от Avanpost IDM |
-| GET | `/admin/dlq` | Список DLQ (фильтры, пагинация) |
-| POST | `/admin/dlq/:id/retry` | Повторная обработка |
-| POST | `/admin/dlq/:id/skip` | Пропустить событие |
-| GET | `/metrics` | Prometheus метрики |
-| GET | `/api` | Swagger UI |
-| GET | `/admin/target-systems` | Список target systems |
-| POST | `/admin/target-systems` | Создать target system |
-| PATCH | `/admin/target-systems/:id` | Обновить target system |
-| DELETE | `/admin/target-systems/:id` | Удалить target system |
-| POST | `/admin/target-systems/:id/test` | Проверить связь |
+| Метод  | Путь                               | Описание                                          |
+| ------ | ---------------------------------- | ------------------------------------------------- |
+| GET    | `/health`                          | Health check: DB ping + Redis/Kafka config state  |
+| POST   | `/webhooks/avanpost`               | Приём событий от Avanpost IDM                     |
+| GET    | `/idm/target-systems`              | IDM-facing каталог включённых целевых систем      |
+| GET    | `/idm/target-systems/:name`        | IDM-facing карточка целевой системы               |
+| GET    | `/idm/:targetSystem/test`          | Read facade: `system.test` целевой системы        |
+| GET    | `/idm/:targetSystem/users`         | Read facade: список пользователей целевой системы |
+| GET    | `/idm/:targetSystem/users/resolve` | Read facade: resolve пользователя                 |
+| GET    | `/idm/:targetSystem/users/:id`     | Read facade: пользователь целевой системы         |
+| GET    | `/idm/:targetSystem/groups`        | Read facade: список групп целевой системы         |
+| GET    | `/idm/:targetSystem/groups/:id`    | Read facade: группа целевой системы               |
+| GET    | `/idm/:targetSystem/schema`        | Read facade: schema целевой системы               |
+| POST   | `/idm/:targetSystem/sync`          | Read facade: `sync.full` или `sync.incremental`   |
+| GET    | `/admin/dlq`                       | Список DLQ (фильтры, пагинация)                   |
+| POST   | `/admin/dlq/:id/retry`             | Повторная обработка                               |
+| POST   | `/admin/dlq/:id/skip`              | Пропустить событие                                |
+| GET    | `/metrics`                         | Prometheus метрики                                |
+| GET    | `/api`                             | Swagger UI                                        |
+| GET    | `/admin/target-systems`            | Список target systems                             |
+| POST   | `/admin/target-systems`            | Создать target system                             |
+| PATCH  | `/admin/target-systems/:id`        | Обновить target system                            |
+| DELETE | `/admin/target-systems/:id`        | Удалить target system                             |
+| POST   | `/admin/target-systems/:id/test`   | Проверить связь                                   |
 
-## Mock IDP (dev/test)
+## Mock IDM (dev/test)
 
 Модуль для тестирования без реального Avanpost IDM:
 
 ```bash
-POST /mock-idp/scenario/create-user   # Создание пользователя
-POST /mock-idp/scenario/update-user   # Обновление
-POST /mock-idp/scenario/delete-user   # Удаление
-POST /mock-idp/scenario/duplicate     # Дубликат (проверка idempotency)
-POST /mock-idp/scenario/malformed     # Невалидный payload
-POST /mock-idp/scenario/fail          # Ошибка коннектора → DLQ
+POST /mock-idm/scenario/create-user   # Создание пользователя
+POST /mock-idm/scenario/update-user   # Обновление
+POST /mock-idm/scenario/delete-user   # Удаление
+POST /mock-idm/scenario/duplicate     # Дубликат (проверка idempotency)
+POST /mock-idm/scenario/malformed     # Невалидный payload
+POST /mock-idm/scenario/fail          # Ошибка коннектора → DLQ
 ```
 
 ## Тестирование
@@ -195,10 +270,20 @@ npm run test
 # E2E tests
 npm run test:e2e
 
+# E2E contract tests with isolated SQLite database
+npm run test:e2e:sqlite
+
+# Runtime smoke: build, startup, /health, /metrics,
+# Verbose diagnostics, redaction and file log sink
+npm run test:runtime-smoke
+
+# Full local validation gate
+./scripts/validate-structure.sh
+
 # Нагрузочное тестирование
 npx autocannon -c 10 -d 10 -m POST \
   -H "Content-Type: application/json" \
-  -b '{"eventId":"load-1","operation":"create","targetSystem":"rest","payload":{"url":"http://localhost:3010/health","data":{}}}' \
+  -b '{"eventId":"load-1","operation":"user.create","targetSystem":"fake","payload":{"data":{"username":"load-user"}}}' \
   http://localhost:3010/webhooks/avanpost
 
 # Валидация
@@ -217,13 +302,13 @@ npm run validate
 docker compose -f docker-compose.dev.yml ps
 
 # Проверить логи
-tail -f /tmp/idpmw.log
+tail -f /tmp/idmmw.log
 ```
 
 ### DLQ растёт
 
 1. Проверить метрики: `curl http://localhost:3010/metrics | grep dlq_size`
-2. Проверить ошибки коннекторов: `grep "connector" /tmp/idpmw.log`
+2. Проверить ошибки коннекторов: `grep "connector" /tmp/idmmw.log`
 3. Ручной retry через Admin UI или API:
    ```bash
    curl -X POST http://localhost:3010/admin/dlq/<id>/retry
@@ -236,8 +321,23 @@ tail -f /tmp/idpmw.log
 
 ### Redis недоступен
 
-- При `REDIS_ENABLED=false` используется PostgreSQL advisory locks
-- Потеря кэша не критична — данные восстанавливаются из PostgreSQL
+- Текущая сборка использует PostgreSQL idempotency store.
+- `REDIS_ENABLED=true` завершает startup ошибкой, потому что Redis store не реализован и не должен молча принимать события в неверном режиме.
+- Для dev/test/prod pilot оставляйте `REDIS_ENABLED=false`.
+
+### Diagnostic logging
+
+- По умолчанию diagnostic logging выключен.
+- `DebugLogging__Enabled=true` включает diagnostic события через основной structured logging pipeline.
+- `DebugLogging__Level=Basic` пишет безопасные события маршрутизации без payload.
+- `DebugLogging__Level=Verbose` временно пишет расширенные diagnostic события с маскированием секретов.
+- `LOG_SINK=file` добавляет второй JSON file sink в `LOG_FILE_PATH` для collector/sidecar; stdout/stderr остаётся включённым.
+- `npm run test:runtime-smoke` проверяет реальный startup с `DebugLogging__Level=Verbose`, webhook diagnostics и отсутствие утечки password/token в log sink.
+
+## Custom connector deployment
+
+Подробное руководство по созданию и развёртыванию пользовательского коннектора:
+[docs/CUSTOM_CONNECTOR_DEPLOYMENT.md](docs/CUSTOM_CONNECTOR_DEPLOYMENT.md)
 
 ## Multi-instance target systems
 
@@ -251,15 +351,14 @@ POST /admin/target-systems
   "type": "zabbix",
   "label": "Zabbix Production",
   "config": {
-    "baseUrl": "http://zabbix.local/api",
-    "username": "admin",
-    "code": "..."
+    "baseUrl": "http://zabbix.local",
+    "apiToken": "..."
   },
   "enabled": true
 }
 ```
 
-Поддерживаемые типы: `zabbix`, `cmdbuild`, `rest`, `db`.
+Поддерживаемые типы: `zabbix`, `cmdbuild`, `rest`, `db`, `fake`.
 
 ## Лицензия
 

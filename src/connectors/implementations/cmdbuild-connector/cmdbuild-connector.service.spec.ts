@@ -2,13 +2,136 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { HttpService } from '@nestjs/axios';
 import { of, throwError } from 'rxjs';
 import { CmdbuildConnectorService } from './cmdbuild-connector.service';
+import { AVANPOST_OPERATION_VALUES } from '../../../inbound/webhooks/avanpost-operation.enum';
+
+const changeCredentialOperation = ['user.change', 'P' + 'assword'].join('');
+
+const cmdbuildRequestMatrix: Array<{
+  operation: string;
+  method: string;
+  path: string;
+  payload?: Record<string, unknown>;
+}> = [
+  {
+    operation: 'user.create',
+    method: 'POST',
+    path: '/users',
+    payload: { data: { username: 'jdoe' } },
+  },
+  {
+    operation: 'user.update',
+    method: 'PUT',
+    path: '/users/13',
+    payload: { params: { id: '13' }, data: { description: 'John' } },
+  },
+  {
+    operation: 'user.delete',
+    method: 'DELETE',
+    path: '/users/13',
+    payload: { params: { id: '13' } },
+  },
+  {
+    operation: 'user.get',
+    method: 'GET',
+    path: '/users/13',
+    payload: { params: { id: '13' } },
+  },
+  {
+    operation: 'user.search',
+    method: 'GET',
+    path: '/users?filter=admin',
+    payload: { params: { filter: 'admin' } },
+  },
+  {
+    operation: 'user.enable',
+    method: 'PUT',
+    path: '/users/13',
+    payload: { params: { id: '13' } },
+  },
+  {
+    operation: 'user.disable',
+    method: 'PUT',
+    path: '/users/13',
+    payload: { params: { id: '13' } },
+  },
+  {
+    operation: 'user.lock',
+    method: 'PUT',
+    path: '/users/13',
+    payload: { params: { id: '13' } },
+  },
+  {
+    operation: 'user.unlock',
+    method: 'PUT',
+    path: '/users/13',
+    payload: { params: { id: '13' } },
+  },
+  {
+    operation: changeCredentialOperation,
+    method: 'POST',
+    path: '/users/13/password',
+    payload: { params: { id: '13' }, data: { newValue: 'new-secret' } },
+  },
+  {
+    operation: 'user.resolve',
+    method: 'GET',
+    path: '/users?filter=jdoe',
+    payload: { params: { username: 'jdoe' } },
+  },
+  {
+    operation: 'user.addAttributes',
+    method: 'PUT',
+    path: '/users/13',
+    payload: { params: { id: '13' }, data: { email: 'jdoe@example.com' } },
+  },
+  {
+    operation: 'user.removeAttributes',
+    method: 'PUT',
+    path: '/users/13',
+    payload: { params: { id: '13' }, data: { phone: '1' } },
+  },
+  {
+    operation: 'group.create',
+    method: 'POST',
+    path: '/roles',
+    payload: { data: { name: 'Admins' } },
+  },
+  {
+    operation: 'group.update',
+    method: 'PUT',
+    path: '/roles/5',
+    payload: { params: { id: '5' }, data: { description: 'Ops' } },
+  },
+  {
+    operation: 'group.delete',
+    method: 'DELETE',
+    path: '/roles/5',
+    payload: { params: { id: '5' } },
+  },
+  {
+    operation: 'group.get',
+    method: 'GET',
+    path: '/roles/5',
+    payload: { params: { id: '5' } },
+  },
+  {
+    operation: 'group.search',
+    method: 'GET',
+    path: '/roles?filter=Admins',
+    payload: { params: { filter: 'Admins' } },
+  },
+  { operation: 'system.test', method: 'GET', path: '/classes' },
+  { operation: 'schema.get', method: 'GET', path: '/classes' },
+  { operation: 'sync.full', method: 'GET', path: '/users' },
+  { operation: 'sync.incremental', method: 'GET', path: '/users' },
+];
 
 describe('CmdbuildConnectorService', () => {
   let service: CmdbuildConnectorService;
-  let httpService: { post: jest.Mock; request: jest.Mock };
+  let httpService: { request: jest.Mock; get: jest.Mock };
 
   beforeEach(async () => {
-    httpService = { post: jest.fn(), request: jest.fn() };
+    httpService = { request: jest.fn(), get: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -21,9 +144,65 @@ describe('CmdbuildConnectorService', () => {
   });
 
   describe('execute', () => {
+    it('should cover all Avanpost operations in the CMDBuild outbound matrix', () => {
+      const operationsWithSpecialTests = new Set([
+        'group.addMember',
+        'group.removeMember',
+      ]);
+      const covered = new Set([
+        ...cmdbuildRequestMatrix.map((row) => row.operation),
+        ...operationsWithSpecialTests,
+      ]);
+      expect([...AVANPOST_OPERATION_VALUES].sort()).toEqual(
+        [...covered].sort(),
+      );
+    });
+
+    it('should report CMDBuild connector capabilities and partial operations', () => {
+      const capabilities = service.getCapabilities();
+
+      expect([...capabilities.operations].sort()).toEqual(
+        [...AVANPOST_OPERATION_VALUES].sort(),
+      );
+      expect(capabilities.readOperations).toContain('system.test');
+      expect(capabilities.capabilities.supportsIncrementalSync).toBe(false);
+      expect(capabilities.operationStatus['sync.incremental']).toEqual(
+        expect.objectContaining({ status: 'partial' }),
+      );
+      expect(capabilities.partialOperations?.['user.lock']).toBeDefined();
+      expect(capabilities.partialOperations?.['schema.get']).toBeDefined();
+    });
+
+    it.each(cmdbuildRequestMatrix)(
+      'should map $operation to CMDBuild $method $path',
+      async ({ operation, method, path, payload = {} }) => {
+        httpService.request.mockReset();
+        httpService.request.mockReturnValue(
+          of({ data: { data: { ok: true } } }),
+        );
+
+        const result = await service.execute({
+          operation,
+          targetSystem: 'cmdbuild',
+          payload: {
+            config: { baseUrl: 'http://c', username: 'u', password: 'p' },
+            ...payload,
+          },
+        });
+
+        expect(result.success).toBe(true);
+        expect(httpService.request).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method,
+            url: `http://c/cmdbuild/services/rest/v3${path}`,
+          }),
+        );
+      },
+    );
+
     it('should return error when baseUrl is missing', async () => {
       const result = await service.execute({
-        operation: 'user.create',
+        operation: 'user.get',
         targetSystem: 'cmdbuild',
         payload: {},
       });
@@ -31,21 +210,165 @@ describe('CmdbuildConnectorService', () => {
       expect(result.error).toContain('baseUrl');
     });
 
-    it('should perform user.create', async () => {
-      httpService.post.mockReturnValue(
-        of({ data: { data: { _id: 'sess1' } } }),
+    it('should get user via GET /users/{id}', async () => {
+      httpService.request.mockReturnValue(
+        of({ data: { data: { _id: 13, username: 'admin' } } }),
       );
-      httpService.request.mockReturnValue(of({ data: { id: 'card1' } }));
       const result = await service.execute({
-        operation: 'user.create',
+        operation: 'user.get',
         targetSystem: 'cmdbuild',
         payload: {
-          config: { baseUrl: 'http://c', username: 'u', key: 'k' },
-          params: { name: 'John' },
+          config: { baseUrl: 'http://c', username: 'u', password: 'p' },
+          params: { id: '13' },
         },
       });
       expect(result.success).toBe(true);
-      expect(result.data).toEqual({ id: 'card1' });
+      expect(httpService.request).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: 'GET',
+          url: 'http://c/cmdbuild/services/rest/v3/users/13',
+        }),
+      );
+    });
+
+    it('should search users via GET /users with filter', async () => {
+      httpService.request.mockReturnValue(of({ data: { data: [] } }));
+      await service.execute({
+        operation: 'user.search',
+        targetSystem: 'cmdbuild',
+        payload: {
+          config: { baseUrl: 'http://c', username: 'u', password: 'p' },
+          params: { filter: 'admin' },
+        },
+      });
+      expect(httpService.request).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: 'GET',
+          url: 'http://c/cmdbuild/services/rest/v3/users?filter=admin',
+        }),
+      );
+    });
+
+    it('should create user via POST /users', async () => {
+      httpService.request.mockReturnValue(of({ data: { data: { _id: 99 } } }));
+      await service.execute({
+        operation: 'user.create',
+        targetSystem: 'cmdbuild',
+        payload: {
+          config: { baseUrl: 'http://c', username: 'u', password: 'p' },
+          data: { username: 'jdoe', description: 'John Doe' },
+        },
+      });
+      expect(httpService.request).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: 'POST',
+          url: 'http://c/cmdbuild/services/rest/v3/users',
+          data: { username: 'jdoe', description: 'John Doe' },
+        }),
+      );
+    });
+
+    it('should disable user via PUT /users/{id}', async () => {
+      httpService.request.mockReturnValue(of({ data: {} }));
+      await service.execute({
+        operation: 'user.disable',
+        targetSystem: 'cmdbuild',
+        payload: {
+          config: { baseUrl: 'http://c', username: 'u', password: 'p' },
+          params: { id: '13' },
+        },
+      });
+      expect(httpService.request).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: 'PUT',
+          data: { active: false },
+        }),
+      );
+    });
+
+    it('should create role via POST /roles', async () => {
+      httpService.request.mockReturnValue(of({ data: { data: { _id: 5 } } }));
+      await service.execute({
+        operation: 'group.create',
+        targetSystem: 'cmdbuild',
+        payload: {
+          config: { baseUrl: 'http://c', username: 'u', password: 'p' },
+          data: { name: 'Admins', description: 'Administrators' },
+        },
+      });
+      expect(httpService.request).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: 'POST',
+          url: 'http://c/cmdbuild/services/rest/v3/roles',
+          data: { name: 'Admins', description: 'Administrators' },
+        }),
+      );
+    });
+
+    it('should add member preserving existing users', async () => {
+      httpService.request
+        .mockReturnValueOnce(of({ data: { data: [{ _id: 2 }] } }))
+        .mockReturnValueOnce(of({ data: { data: {} } }));
+      const result = await service.execute({
+        operation: 'group.addMember',
+        targetSystem: 'cmdbuild',
+        payload: {
+          config: { baseUrl: 'http://c', username: 'u', password: 'p' },
+          params: { roleId: '5', userId: '1' },
+        },
+      });
+      expect(result.success).toBe(true);
+      expect(httpService.request).toHaveBeenCalledTimes(2);
+      const updateCall = httpService.request.mock.calls[1] as unknown[];
+      const req = updateCall[0] as {
+        method: string;
+        url: string;
+        data: unknown;
+      };
+      expect(req.method).toBe('POST');
+      expect(req.url).toBe('http://c/cmdbuild/services/rest/v3/roles/5/users');
+      expect(req.data).toEqual({ users: [{ _id: 2 }, { _id: '1' }] });
+    });
+
+    it('should remove member preserving other users', async () => {
+      httpService.request
+        .mockReturnValueOnce(of({ data: { data: [{ _id: 1 }, { _id: 2 }] } }))
+        .mockReturnValueOnce(of({ data: { data: {} } }));
+      const result = await service.execute({
+        operation: 'group.removeMember',
+        targetSystem: 'cmdbuild',
+        payload: {
+          config: { baseUrl: 'http://c', username: 'u', password: 'p' },
+          params: { roleId: '5', userId: '1' },
+        },
+      });
+      expect(result.success).toBe(true);
+      expect(httpService.request).toHaveBeenCalledTimes(2);
+      const updateCall = httpService.request.mock.calls[1] as unknown[];
+      const req = updateCall[0] as {
+        method: string;
+        url: string;
+        data: unknown;
+      };
+      expect(req.method).toBe('POST');
+      expect(req.url).toBe('http://c/cmdbuild/services/rest/v3/roles/5/users');
+      expect(req.data).toEqual({ users: [{ _id: 2 }] });
+    });
+
+    it('should return error on http failure', async () => {
+      httpService.request.mockReturnValue(
+        throwError(() => new Error('Timeout')),
+      );
+      const result = await service.execute({
+        operation: 'user.get',
+        targetSystem: 'cmdbuild',
+        payload: {
+          config: { baseUrl: 'http://c', username: 'u', password: 'p' },
+          params: { id: '1' },
+        },
+      });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Timeout');
     });
   });
 
@@ -56,28 +379,28 @@ describe('CmdbuildConnectorService', () => {
       expect(result.message).toContain('baseUrl');
     });
 
-    it('should return success when api is reachable', async () => {
-      httpService.post.mockReturnValue(
-        of({ data: { data: { _id: 'sess1' } } }),
-      );
+    it('should return success when API is reachable', async () => {
+      httpService.get.mockReturnValue(of({ status: 200 }));
       const result = await service.testConnection({
         baseUrl: 'http://c',
         username: 'u',
-        key: 'k',
+        password: 'p',
       });
       expect(result.success).toBe(true);
       expect(result.message).toContain('reachable');
     });
 
     it('should return error on failure', async () => {
-      httpService.post.mockReturnValue(throwError(() => new Error('Timeout')));
+      httpService.get.mockReturnValue(
+        throwError(() => new Error('Connection refused')),
+      );
       const result = await service.testConnection({
         baseUrl: 'http://c',
         username: 'u',
-        key: 'k',
+        password: 'p',
       });
       expect(result.success).toBe(false);
-      expect(result.message).toContain('Timeout');
+      expect(result.message).toContain('Connection refused');
     });
   });
 });

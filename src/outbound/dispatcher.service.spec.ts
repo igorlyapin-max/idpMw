@@ -33,7 +33,7 @@ describe('DispatcherService', () => {
 
     await service.dispatch({
       eventId: 'e1',
-      operation: 'create',
+      operation: 'user.create',
       targetSystem: 'zabbix',
       payload: {},
     });
@@ -49,12 +49,14 @@ describe('DispatcherService', () => {
     configGet.mockReturnValue(true);
     processing.process.mockRejectedValue(new Error('fail'));
 
-    await service.dispatch({
-      eventId: 'e1',
-      operation: 'create',
-      targetSystem: 'zabbix',
-      payload: {},
-    });
+    await expect(
+      service.dispatch({
+        eventId: 'e1',
+        operation: 'user.create',
+        targetSystem: 'zabbix',
+        payload: {},
+      }),
+    ).rejects.toThrow('fail');
 
     expect(kafkaProducer.send).toHaveBeenCalledWith(
       'idm.events.out',
@@ -68,7 +70,7 @@ describe('DispatcherService', () => {
 
     await service.dispatch({
       eventId: 'e1',
-      operation: 'create',
+      operation: 'user.create',
       targetSystem: 'zabbix',
       payload: {},
     });

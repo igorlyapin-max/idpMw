@@ -115,4 +115,28 @@ describe('ProcessingService', () => {
       }),
     );
   });
+
+  it('should return connector data for read processing', async () => {
+    const connector = {
+      execute: jest.fn().mockResolvedValue({
+        success: true,
+        data: { id: 'user-1', username: 'jdoe' },
+      }),
+    };
+    registry.get.mockReturnValue(connector);
+
+    const result = await service.processWithResult({
+      eventId: 'e-read-1',
+      operation: 'user.get',
+      targetSystem: 'fake',
+      payload: { params: { id: 'user-1' } },
+    });
+
+    expect(result).toEqual({
+      success: true,
+      data: { id: 'user-1', username: 'jdoe' },
+    });
+    expect(metrics.recordEvent).toHaveBeenCalledWith('success');
+    expect(dlq.add).not.toHaveBeenCalled();
+  });
 });

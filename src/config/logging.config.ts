@@ -1,0 +1,114 @@
+import pino, { type DestinationStream } from 'pino';
+import type { Options } from 'pino-http';
+
+export type DebugLoggingLevel = 'Basic' | 'Verbose';
+
+export interface RuntimeLoggingConfig {
+  debugEnabled: boolean;
+  debugLevel: DebugLoggingLevel;
+  logSink: 'stdout' | 'file';
+  logFilePath: string;
+  pinoLevel: 'debug' | 'info';
+}
+
+const SECRET_REDACTION_PATHS = [
+  'req.headers.authorization',
+  'req.headers.cookie',
+  'headers.Authorization',
+  'headers.authorization',
+  'payload.config.password',
+  'payload.config.passwd',
+  'payload.config.token',
+  'payload.config.apiKey',
+  'payload.config.key',
+  'payload.config.secret',
+  'payload.data.password',
+  'payload.data.passwd',
+  'payload.data.newValue',
+  'config.password',
+  'config.passwd',
+  'config.token',
+  'config.apiKey',
+  'config.key',
+  'config.secret',
+  '*.password',
+  '*.passwd',
+  '*.token',
+  '*.apiKey',
+  '*.key',
+  '*.secret',
+];
+
+function envFlag(primary: string, fallback?: string): boolean {
+  return (
+    process.env[primary] === 'true' ||
+    (fallback !== undefined && process.env[fallback] === 'true')
+  );
+}
+
+function debugLevel(): DebugLoggingLevel {
+  const value =
+    process.env['DebugLogging__Level'] ?? process.env['DEBUG_LOGGING_LEVEL'];
+  return value === 'Verbose' ? 'Verbose' : 'Basic';
+}
+
+export function runtimeLoggingConfig(): RuntimeLoggingConfig {
+  const debugEnabled = envFlag(
+    'DebugLogging__Enabled',
+    'DEBUG_LOGGING_ENABLED',
+  );
+  const level = debugLevel();
+  const logSink =
+    process.env['LOG_SINK'] === 'file'
+      ? ('file' as const)
+      : ('stdout' as const);
+
+  return {
+    debugEnabled,
+    debugLevel: level,
+    logSink,
+    logFilePath: process.env['LOG_FILE_PATH'] ?? '/tmp/idmmw.log',
+    pinoLevel:
+      debugEnabled && level === 'Verbose'
+        ? 'debug'
+        : process.env['NODE_ENV'] === 'production'
+          ? 'info'
+          : 'debug',
+  };
+}
+
+export function createPinoHttpConfig(): Options | [Options, DestinationStream] {
+  const cfg = runtimeLoggingConfig();
+  const options: Options = {
+    level: cfg.pinoLevel,
+    base: {
+      service: 'idmMw',
+    },
+    redact: {
+      paths: SECRET_REDACTION_PATHS,
+      censor: '[REDACTED]',
+    },
+    transport:
+      cfg.logSink === 'stdout' && process.env['NODE_ENV'] !== 'production'
+        ? { target: 'pino-pretty' }
+        : undefined,
+  };
+
+  if (cfg.logSink !== 'file') {
+    return options;
+  }
+
+  const stream = pino.multistream([
+    { level: cfg.pinoLevel, stream: pino.destination(1) },
+    {
+      level: cfg.pinoLevel,
+      stream: pino.destination({
+        dest: cfg.logFilePath,
+        sync: false,
+        mkdir: true,
+      }),
+    },
+  ]);
+
+  return [{ ...options, transport: undefined }, stream];
+}

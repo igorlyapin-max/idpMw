@@ -1,40 +1,28 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConnectorRegistry } from './connector.registry';
 import { PrismaService } from '../database/prisma.service';
+import { JsonHelper } from '../database/json.helper';
 import { RestConnectorService } from './implementations/rest-connector/rest-connector.service';
 import { DbConnectorService } from './implementations/db-connector/db-connector.service';
 import { ZabbixConnectorService } from './implementations/zabbix-connector/zabbix-connector.service';
 import { CmdbuildConnectorService } from './implementations/cmdbuild-connector/cmdbuild-connector.service';
 import { FakeConnectorService } from './implementations/fake-connector/fake-connector.service';
 
+type MockConnector = {
+  name: string;
+  execute: jest.Mock;
+  testConnection: jest.Mock;
+  getCapabilities?: jest.Mock;
+};
+
 describe('ConnectorRegistry', () => {
   let registry: ConnectorRegistry;
   let prisma: { targetSystem: { findMany: jest.Mock } };
-  let restConnector: {
-    name: string;
-    execute: jest.Mock;
-    testConnection: jest.Mock;
-  };
-  let dbConnector: {
-    name: string;
-    execute: jest.Mock;
-    testConnection: jest.Mock;
-  };
-  let zabbixConnector: {
-    name: string;
-    execute: jest.Mock;
-    testConnection: jest.Mock;
-  };
-  let cmdbuildConnector: {
-    name: string;
-    execute: jest.Mock;
-    testConnection: jest.Mock;
-  };
-  let fakeConnector: {
-    name: string;
-    execute: jest.Mock;
-    testConnection: jest.Mock;
-  };
+  let restConnector: MockConnector;
+  let dbConnector: MockConnector;
+  let zabbixConnector: MockConnector;
+  let cmdbuildConnector: MockConnector;
+  let fakeConnector: MockConnector;
 
   beforeEach(async () => {
     prisma = { targetSystem: { findMany: jest.fn() } };
@@ -48,6 +36,7 @@ describe('ConnectorRegistry', () => {
       name: 'zabbix',
       execute: jest.fn(),
       testConnection: jest.fn(),
+      getCapabilities: jest.fn(),
     };
     cmdbuildConnector = {
       name: 'cmdbuild',
@@ -59,11 +48,18 @@ describe('ConnectorRegistry', () => {
       execute: jest.fn(),
       testConnection: jest.fn(),
     };
+    const jsonHelper = {
+      fromJson: jest.fn((v: unknown) =>
+        typeof v === 'string' ? (JSON.parse(v) as Record<string, unknown>) : v,
+      ),
+      toJson: jest.fn((v: unknown) => v),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ConnectorRegistry,
         { provide: PrismaService, useValue: prisma },
+        { provide: JsonHelper, useValue: jsonHelper },
         { provide: RestConnectorService, useValue: restConnector },
         { provide: DbConnectorService, useValue: dbConnector },
         { provide: ZabbixConnectorService, useValue: zabbixConnector },
@@ -98,6 +94,36 @@ describe('ConnectorRegistry', () => {
       ]);
       await registry.reload();
       expect(registry.get('x1')).toBeUndefined();
+    });
+
+    it('should expose base connector capabilities through dynamic proxies', async () => {
+      const capabilities = {
+        operations: ['user.get'],
+        readOperations: ['user.get'],
+        writeOperations: [],
+        capabilities: {
+          supportsRead: true,
+          supportsWrite: false,
+          supportsSync: false,
+          supportsIncrementalSync: false,
+          supportsSchema: false,
+        },
+        operationStatus: { 'user.get': { status: 'implemented' } },
+      };
+      zabbixConnector.getCapabilities?.mockReturnValue(capabilities);
+      prisma.targetSystem.findMany.mockResolvedValue([
+        {
+          id: '1',
+          name: 'z1',
+          type: 'zabbix',
+          enabled: true,
+          config: { url: 'http://z' },
+        },
+      ]);
+
+      await registry.reload();
+
+      expect(registry.get('z1')?.getCapabilities?.()).toEqual(capabilities);
     });
   });
 

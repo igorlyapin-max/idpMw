@@ -45,6 +45,16 @@ export class TargetSystemController {
     });
   }
 
+  @Get('name/:name')
+  @ApiOperation({ summary: 'Get target system by name' })
+  @ApiResponse({ status: 200, description: 'Found' })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  async findByName(@Param('name') name: string) {
+    const ts = await this.service.findByName(name);
+    if (!ts) return { success: false, message: 'Not found' };
+    return ts;
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get target system by ID' })
   @ApiResponse({ status: 200, description: 'Found' })

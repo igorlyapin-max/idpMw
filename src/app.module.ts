@@ -4,10 +4,12 @@ import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
 import { LoggerModule } from 'nestjs-pino';
 import { appConfigSchema } from './config/app.config';
+import { createPinoHttpConfig } from './config/logging.config';
 import { PrismaModule } from './database/prisma.module';
 import { SecretsModule } from './secrets/secrets.module';
+import { DiagnosticsModule } from './diagnostics/diagnostics.module';
 import { HealthModule } from './health/health.module';
-import { MockIdpModule } from './mock-idp/mock-idp.module';
+import { MockIdmModule } from './mock-idm/mock-idm.module';
 import { WebhooksModule } from './inbound/webhooks/webhooks.module';
 import { KafkaModule } from './kafka/kafka.module';
 import { AdminModule } from './admin/admin.module';
@@ -32,35 +34,40 @@ const isLightweight = process.env['LIGHTWEIGHT_MODE'] === 'true';
       },
     }),
     LoggerModule.forRoot({
-      pinoHttp: {
-        level: process.env['NODE_ENV'] === 'production' ? 'info' : 'debug',
-        transport:
-          process.env['NODE_ENV'] !== 'production'
-            ? { target: 'pino-pretty' }
-            : undefined,
-      },
+      pinoHttp: createPinoHttpConfig(),
     }),
+    DiagnosticsModule,
     SecretsModule,
     PrismaModule,
     HealthModule,
-    MockIdpModule,
+    MockIdmModule,
     WebhooksModule,
     ...(isLightweight ? [] : [KafkaModule]),
     AdminModule,
     MetricsModule,
     ServeStaticModule.forRootAsync({
       useFactory: (config: ConfigService) => {
-        const enabled = config.get<boolean>('ADMIN_UI_ENABLED') ?? false;
+        const adminUiEnabled = config.get<boolean>('ADMIN_UI_ENABLED') ?? false;
+        const emulatorPath = join(__dirname, '..', 'idm-emulator', 'dist');
         return [
-          enabled
-            ? {
-                rootPath: join(__dirname, '..', 'ui', 'dist'),
-                serveRoot: '/',
-                serveStaticOptions: {
-                  index: 'index.html',
+          {
+            rootPath: emulatorPath,
+            serveRoot: '/idm-emulator',
+            serveStaticOptions: {
+              index: 'index.html',
+            },
+          },
+          ...(adminUiEnabled
+            ? [
+                {
+                  rootPath: join(__dirname, '..', 'ui', 'dist'),
+                  serveRoot: '/',
+                  serveStaticOptions: {
+                    index: 'index.html',
+                  },
                 },
-              }
-            : { rootPath: '/dev/null' },
+              ]
+            : []),
         ];
       },
       inject: [ConfigService],

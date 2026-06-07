@@ -21,22 +21,32 @@ describe('FakeConnectorService', () => {
   });
 
   describe('execute', () => {
-    it('should return error when baseUrl is missing', async () => {
+    it('should run local mock mode when baseUrl is missing', async () => {
       const result = await service.execute({
-        operation: 'create',
+        operation: 'user.create',
         targetSystem: 'fake',
         payload: {},
       });
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('baseUrl');
+      expect(result.success).toBe(true);
+      expect(result.data).toMatchObject({ status: 'created' });
     });
 
-    it('should post to echo endpoint and return data', async () => {
+    it('should run local mock mode for read operations', async () => {
+      const result = await service.execute({
+        operation: 'user.search',
+        targetSystem: 'fake',
+        payload: {},
+      });
+      expect(result.success).toBe(true);
+      expect(result.data).toMatchObject({ total: 2 });
+    });
+
+    it('should post to echo endpoint when baseUrl is configured', async () => {
       httpService.post.mockReturnValue(
         of({ status: 200, data: { mirrored: true } }),
       );
       const result = await service.execute({
-        operation: 'create',
+        operation: 'user.create',
         targetSystem: 'fake',
         payload: {
           config: { baseUrl: 'http://fake', apiKey: 'k123' },
@@ -47,7 +57,7 @@ describe('FakeConnectorService', () => {
       expect(result.data).toEqual({ mirrored: true });
       expect(httpService.post).toHaveBeenCalledWith(
         'http://fake/api/echo',
-        expect.objectContaining({ operation: 'create' }),
+        expect.objectContaining({ operation: 'user.create' }),
         expect.objectContaining({
           headers: { 'Content-Type': 'application/json', 'X-Api-Id': 'k123' },
         }),
@@ -57,7 +67,7 @@ describe('FakeConnectorService', () => {
     it('should return error on http failure', async () => {
       httpService.post.mockReturnValue(throwError(() => new Error('Timeout')));
       const result = await service.execute({
-        operation: 'create',
+        operation: 'user.create',
         targetSystem: 'fake',
         payload: { config: { baseUrl: 'http://fake' } },
       });
@@ -67,10 +77,10 @@ describe('FakeConnectorService', () => {
   });
 
   describe('testConnection', () => {
-    it('should return error when baseUrl is missing', async () => {
+    it('should return success for local mock mode', async () => {
       const result = await service.testConnection({});
-      expect(result.success).toBe(false);
-      expect(result.message).toContain('baseUrl');
+      expect(result.success).toBe(true);
+      expect(result.message).toContain('local');
     });
 
     it('should return success when health is reachable', async () => {

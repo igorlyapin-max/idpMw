@@ -36,32 +36,32 @@ function getOrCreateGauge(
 @Injectable()
 export class MetricsService {
   readonly httpRequestsTotal = getOrCreateCounter(
-    'idpmw_http_requests_total',
+    'idmmw_http_requests_total',
     'Total HTTP requests',
     ['method', 'route', 'status'],
   );
 
   readonly httpRequestDuration = getOrCreateHistogram(
-    'idpmw_http_request_duration_seconds',
+    'idmmw_http_request_duration_seconds',
     'HTTP request duration in seconds',
     ['method', 'route'],
     [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
   );
 
   readonly connectorErrors = getOrCreateCounter(
-    'idpmw_connector_errors_total',
+    'idmmw_connector_errors_total',
     'Total connector errors',
     ['connector', 'operation'],
   );
 
   readonly dlqSize = getOrCreateGauge(
-    'idpmw_dlq_size',
+    'idmmw_dlq_size',
     'Current DLQ size by status',
     ['status'],
   );
 
   readonly eventsProcessed = getOrCreateCounter(
-    'idpmw_events_processed_total',
+    'idmmw_events_processed_total',
     'Total events processed',
     ['status'],
   );

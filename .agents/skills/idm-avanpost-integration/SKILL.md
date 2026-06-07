@@ -231,9 +231,9 @@ middleware ──(Kafka Producer)──> Kafka ──> portal-consumers
 
 ---
 
-## 10. Реализованный проект: idpMw
+## 10. Реализованный проект: idmMw
 
-Репозиторий: `~/projects/idpMw` — готовый middleware на NestJS + React.
+Репозиторий: `~/projects/idmMw` — готовый middleware на NestJS + React.
 
 ### Стек реализации
 
@@ -268,20 +268,20 @@ DB_CONNECTOR_ENABLED=false   # SQL-коннектор через knex
 ADMIN_UI_ENABLED=true        # Раздача React UI
 ```
 
-### Mock IDP (dev/test)
+### Mock IDM (dev/test)
 
-Встроенный эмулятор Avanpost IDM без реального IDP:
-- `/mock-idp/scenario/create-user` — создание пользователя
-- `/mock-idp/scenario/update-user` — обновление
-- `/mock-idp/scenario/delete-user` — удаление
-- `/mock-idp/scenario/duplicate` — проверка idempotency
-- `/mock-idp/scenario/malformed` — невалидный payload
-- `/mock-idp/scenario/fail` — эмуляция ошибки коннектора → DLQ
+Встроенный эмулятор Avanpost IDM без реального IDM:
+- `/mock-idm/scenario/create-user` — создание пользователя
+- `/mock-idm/scenario/update-user` — обновление
+- `/mock-idm/scenario/delete-user` — удаление
+- `/mock-idm/scenario/duplicate` — проверка idempotency
+- `/mock-idm/scenario/malformed` — невалидный payload
+- `/mock-idm/scenario/fail` — эмуляция ошибки коннектора → DLQ
 
 ### Мониторинг
 
-- Prometheus metrics: `idpmw_http_requests_total`, `idpmw_http_request_duration_seconds`, `idpmw_connector_errors_total`, `idpmw_dlq_size`, `idpmw_events_processed_total`
-- Grafana dashboard: `monitoring/grafana/dashboards/idpmw-dashboard.json`
+- Prometheus metrics: `idmmw_http_requests_total`, `idmmw_http_request_duration_seconds`, `idmmw_connector_errors_total`, `idmmw_dlq_size`, `idmmw_events_processed_total`
+- Grafana dashboard: `monitoring/grafana/dashboards/idmmw-dashboard.json`
 - Docker Compose: `docker-compose.monitoring.yml` (Prometheus + Grafana)
 
 ### Тесты

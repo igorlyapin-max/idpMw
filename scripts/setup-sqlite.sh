@@ -1,10 +1,10 @@
 #!/bin/bash
 set -e
 
-echo "Setting up SQLite database for idpMw..."
+echo "Setting up SQLite database for idmMw..."
 
 export DATABASE_PROVIDER=sqlite
-export DATABASE_URL="file:./data/idpmw.db"
+export DATABASE_URL="file:./data/idmmw.db"
 export LIGHTWEIGHT_MODE=true
 
 # Ensure data directory exists

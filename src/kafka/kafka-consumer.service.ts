@@ -31,8 +31,8 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
     const brokers = (
       this.config.get<string>('KAFKA_BROKERS') ?? 'localhost:9092'
     ).split(',');
-    const kafka = new Kafka({ clientId: 'idpmw-consumer', brokers });
-    this.consumer = kafka.consumer({ groupId: 'idpmw-dlq-retry-group' });
+    const kafka = new Kafka({ clientId: 'idmmw-consumer', brokers });
+    this.consumer = kafka.consumer({ groupId: 'idmmw-dlq-retry-group' });
 
     await this.consumer.connect();
     await this.consumer.subscribe({

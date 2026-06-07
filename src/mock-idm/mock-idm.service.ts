@@ -1,41 +1,41 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
+import type { AvanpostOperation } from '../inbound/webhooks/avanpost-operation.enum';
+import { getPayloadTemplate } from './payloads';
 
 export interface MockIdmEvent {
   eventId: string;
-  operation: 'create' | 'update' | 'delete' | 'enable' | 'disable';
+  operation: AvanpostOperation;
   targetSystem: string;
   payload: Record<string, unknown>;
 }
 
 @Injectable()
-export class MockIdpService {
-  private readonly logger = new Logger(MockIdpService.name);
+export class MockIdmService {
+  private readonly logger = new Logger(MockIdmService.name);
 
   constructor(private readonly httpService: HttpService) {}
 
   generateEvent(
-    operation: MockIdmEvent['operation'],
+    operation: AvanpostOperation,
     eventId?: string,
+    targetSystem = 'fake',
     fail = false,
   ): MockIdmEvent {
     const ts = Date.now();
+    const template = getPayloadTemplate(operation);
+
     return {
       eventId:
         eventId ?? `mock-${ts}-${Math.random().toString(36).slice(2, 7)}`,
       operation,
-      targetSystem: 'rest',
+      targetSystem,
       payload: {
+        ...template,
         url: fail
           ? 'http://localhost:9999/fail'
           : 'http://localhost:3010/health',
-        data: {
-          username: `user_${ts}`,
-          email: `user_${ts}@example.com`,
-          firstName: 'Test',
-          lastName: 'User',
-        },
       },
     };
   }

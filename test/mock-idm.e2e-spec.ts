@@ -3,14 +3,14 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 
-interface MockIdpResponse {
+interface MockIdmResponse {
   success: boolean;
   event: {
     operation: string;
   };
 }
 
-describe('Mock IDP (e2e)', () => {
+describe('Mock IDM (e2e)', () => {
   let app: INestApplication;
 
   beforeEach(async () => {
@@ -22,22 +22,22 @@ describe('Mock IDP (e2e)', () => {
     await app.init();
   });
 
-  it('POST /mock-idp/scenario/create-user', async () => {
+  it('POST /mock-idm/scenario/user-create', async () => {
     const res = await request(app.getHttpServer())
-      .post('/mock-idp/scenario/create-user')
+      .post('/mock-idm/scenario/user-create')
       .expect(200);
 
-    const body = res.body as MockIdpResponse;
+    const body = res.body as MockIdmResponse;
     expect(body.success).toBe(true);
-    expect(body.event.operation).toBe('create');
+    expect(body.event.operation).toBe('user.create');
   });
 
-  it('POST /mock-idp/scenario/duplicate — second request returns processed=false', async () => {
+  it('POST /mock-idm/scenario/duplicate — second request returns processed=false', async () => {
     const res = await request(app.getHttpServer())
-      .post('/mock-idp/scenario/duplicate')
+      .post('/mock-idm/scenario/duplicate')
       .expect(200);
 
-    const body = res.body as MockIdpResponse;
+    const body = res.body as MockIdmResponse;
     expect(body.success).toBe(true);
   });
 

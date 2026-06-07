@@ -3,6 +3,7 @@ import { ConnectorRegistry } from '../connectors/connector.registry';
 import { RetryService } from './retry/retry.service';
 import { DlqService } from './dlq/dlq.service';
 import { MetricsService } from '../metrics/metrics.service';
+import type { ConnectorResult } from '../connectors/connector.interface';
 
 /**
  * Payload handed from DispatcherService to ProcessingService.
@@ -48,9 +49,6 @@ export class ProcessingService {
   ) {}
 
   async process(dto: ProcessingPayload): Promise<void> {
-    // Step 1: resolve the connector by name.
-    // In multi-instance mode `dto.targetSystem` is the TargetSystem.name from DB.
-    // In legacy mode it is the static connector type ('rest', 'db', ...).
     const connector = this.registry.get(dto.targetSystem);
     if (!connector) {
       this.logger.error(
@@ -60,9 +58,6 @@ export class ProcessingService {
     }
 
     try {
-      // Step 2: execute with retry logic.
-      // If the connector returns { success: false }, we treat it as a failure
-      // and throw so that the catch block sends it to DLQ.
       const result = await this.retry.execute(
         () =>
           connector.execute({
@@ -83,7 +78,6 @@ export class ProcessingService {
       this.logger.error(`Processing failed for event ${dto.eventId}: ${msg}`);
       this.metrics.recordEvent('failed');
 
-      // Step 3: dead-letter the event for manual review / replay.
       await this.dlq.add({
         eventId: dto.eventId,
         operation: dto.operation,
@@ -92,6 +86,75 @@ export class ProcessingService {
         error: msg,
         retryCount: 3,
       });
+    }
+  }
+
+  /**
+   * Execute a read operation synchronously and return the connector result.
+   *
+   * Read operations do not go through retry/DLQ because the caller (IDM)
+   * is waiting for the response. If the connector fails, the error is
+   * propagated directly to the webhook response.
+   */
+  async processWithResult(dto: ProcessingPayload): Promise<ConnectorResult> {
+    const connector = this.registry.get(dto.targetSystem);
+    if (!connector) {
+      this.logger.error(
+        `No connector found for target system: ${dto.targetSystem}`,
+      );
+      throw new Error(`Unsupported target system: ${dto.targetSystem}`);
+    }
+
+    try {
+      // Prefer native getSchema/sync if available, otherwise fall back to execute.
+      if (dto.operation === 'schema.get' && connector.getSchema) {
+        const result = await connector.getSchema({
+          operation: dto.operation,
+          targetSystem: dto.targetSystem,
+          payload: dto.payload,
+        });
+        this.metrics.recordEvent('success');
+        return result;
+      }
+
+      if (
+        (dto.operation === 'sync.full' ||
+          dto.operation === 'sync.incremental') &&
+        connector.sync
+      ) {
+        const result = await connector.sync(
+          {
+            operation: dto.operation,
+            targetSystem: dto.targetSystem,
+            payload: dto.payload,
+          },
+          dto.operation === 'sync.incremental' ? 'incremental' : 'full',
+        );
+        this.metrics.recordEvent('success');
+        return result;
+      }
+
+      const result = await connector.execute({
+        operation: dto.operation,
+        targetSystem: dto.targetSystem,
+        payload: dto.payload,
+      });
+
+      if (!result.success) {
+        this.metrics.recordConnectorError(dto.targetSystem, dto.operation);
+        throw new Error(result.error ?? 'Connector returned failure');
+      }
+
+      this.logger.log(`Read processing succeeded for event ${dto.eventId}`);
+      this.metrics.recordEvent('success');
+      return result;
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `Read processing failed for event ${dto.eventId}: ${msg}`,
+      );
+      this.metrics.recordEvent('failed');
+      throw error;
     }
   }
 }

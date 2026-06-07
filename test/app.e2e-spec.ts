@@ -21,10 +21,25 @@ describe('AppController (e2e)', () => {
       .expect(200)
       .expect(
         (res: {
-          body: { status: string; info: { database: { status: string } } };
+          body: {
+            status: string;
+            info: {
+              database: { status: string };
+              redis: { status: string; enabled: boolean };
+              kafka: { status: string; enabled: boolean };
+            };
+          };
         }) => {
           expect(res.body.status).toBe('ok');
           expect(res.body.info.database.status).toBe('up');
+          expect(res.body.info.redis).toMatchObject({
+            status: 'up',
+            enabled: false,
+          });
+          expect(res.body.info.kafka).toMatchObject({
+            status: 'up',
+            enabled: false,
+          });
         },
       );
   });

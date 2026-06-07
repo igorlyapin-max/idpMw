@@ -15,6 +15,11 @@ export class IdempotencyService {
     private readonly pgStore: PgIdempotencyStore,
   ) {
     const redisEnabled = this.config.get<boolean>('REDIS_ENABLED') ?? false;
+    if (redisEnabled) {
+      throw new Error(
+        'REDIS_ENABLED=true is not supported in this build: Redis idempotency store is not implemented. Set REDIS_ENABLED=false to use PostgreSQL idempotency.',
+      );
+    }
     this.store = redisEnabled ? this.redisStore : this.pgStore;
     this.logger.log(
       `Using idempotency store: ${redisEnabled ? 'Redis' : 'PostgreSQL'}`,

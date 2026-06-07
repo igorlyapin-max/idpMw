@@ -13,7 +13,10 @@ export class SecretResolverService {
   ) {}
 
   async resolveAll(): Promise<void> {
-    const provider = this.config.get<string>('Secrets.Provider') ?? 'None';
+    const provider =
+      this.config.get<string>('SECRETS_PROVIDER') ??
+      this.config.get<string>('Secrets.Provider') ??
+      'None';
     if (provider === 'None') {
       this.logger.log('Secrets provider is None — skipping resolution');
       return;

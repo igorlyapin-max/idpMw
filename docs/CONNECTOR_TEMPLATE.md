@@ -1,5 +1,7 @@
 # Шаблон добавления нового REST-коннектора
 
+> **Руководство по развёртыванию:** Подробная документация с процедурами проверки, troubleshooting и security checklist — [CUSTOM_CONNECTOR_DEPLOYMENT.md](CUSTOM_CONNECTOR_DEPLOYMENT.md)
+
 > Время интеграции: ~10 минут
 > Живой пример: `src/connectors/implementations/fake-connector/`
 
@@ -46,6 +48,7 @@ Kafka event (optional, if KAFKA_ENABLED=true)
 2. **ConnectorRegistry** при старте (или после reload) создаёт `proxy` для каждой записи из БД. Proxy оборачивает статический коннектор и при вызове `execute()` мержит `config` из БД в `payload.config`.
 
 3. **ProcessingService** вызывает `connector.execute()`:
+
    ```ts
    connector.execute({
      operation: 'host.create',
@@ -76,6 +79,7 @@ Connector ──► execute({ operation: 'user.create', ... })
 ```
 
 Каждый коннектор сам решает, как интерпретировать `operation`:
+
 - **Zabbix** — передаёт как `method` в Zabbix API
 - **CMDBuild** — использует `switch(operation)` для выбора URL/method
 - **Fake/REST** — может игнорировать или логировать operation
@@ -90,15 +94,25 @@ Connector ──► execute({ operation: 'user.create', ... })
 export interface Connector {
   readonly name: string;
   execute(payload: ConnectorPayload): Promise<ConnectorResult>;
-  testConnection(config: Record<string, unknown>): Promise<{ success: boolean; message: string }>;
+  testConnection(
+    config: Record<string, unknown>,
+  ): Promise<{ success: boolean; message: string }>;
+  getCapabilities?(): ConnectorCapabilities;
+  getSchema?(payload: ConnectorPayload): Promise<ConnectorResult>;
+  sync?(payload: ConnectorPayload, mode: string): Promise<ConnectorResult>;
 }
 ```
 
-| Метод | Назначение |
-|-------|-----------|
-| `name` | Уникальный идентификатор типа (`'fake'`, `'zabbix'` …) |
-| `execute` | Основная операция: отправка данных в целевую систему |
-| `testConnection` | Проверка доступности (используется из Admin UI) |
+| Метод             | Назначение                                                            |
+| ----------------- | --------------------------------------------------------------------- |
+| `name`            | Уникальный идентификатор типа (`'fake'`, `'zabbix'` …)                |
+| `execute`         | Основная операция: отправка данных в целевую систему                  |
+| `testConnection`  | Проверка доступности (используется из Admin UI)                       |
+| `getCapabilities` | IDM-facing описание поддерживаемых operations и частичных ограничений |
+| `getSchema`       | Опциональный native handler для `schema.get`                          |
+| `sync`            | Опциональный native handler для `sync.full` / `sync.incremental`      |
+
+Если коннектор обслуживает несколько DB-backed `TargetSystem`, `ConnectorRegistry` прокидывает `getCapabilities()` через proxy. Ответы `GET /idm/target-systems` и `GET /idm/target-systems/:name` используют этот контракт и не возвращают `config` или секреты.
 
 ---
 
@@ -141,9 +155,7 @@ export class MySystemConnectorService implements Connector {
           `${config.baseUrl}/api/users`,
           payload.payload['data'] ?? {},
           {
-            headers: config.apiKey
-              ? { 'X-Api-Key': config.apiKey }
-              : undefined,
+            headers: config.apiKey ? { 'X-Api-Key': config.apiKey } : undefined,
             timeout: config.timeout ?? 10000,
           },
         ),
@@ -183,6 +195,7 @@ export class MySystemConnectorService implements Connector {
 ```
 
 **Правила:**
+
 - Всегда валидируй `config` перед использованием
 - Всегда оборачивай HTTP вызовы в `try/catch`
 - Возвращай понятные сообщения об ошибках
@@ -229,6 +242,7 @@ export class ConnectorRegistry implements OnModuleInit {
 ```
 
 После этого `ConnectorRegistry` автоматически:
+
 - Создаст proxy для каждой `TargetSystem` записи с `type='my-system'`
 - Будет мержить `config` из БД в `payload` при вызове `execute`
 

@@ -10,6 +10,7 @@ import { ZabbixConnectorService } from './implementations/zabbix-connector/zabbi
 import { CmdbuildConnectorService } from './implementations/cmdbuild-connector/cmdbuild-connector.service';
 import { FakeConnectorService } from './implementations/fake-connector/fake-connector.service';
 import { PrismaService } from '../database/prisma.service';
+import { JsonHelper } from '../database/json.helper';
 
 /**
  * ConnectorRegistry — the central routing table for all target systems.
@@ -84,6 +85,7 @@ export class ConnectorRegistry implements OnModuleInit {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly jsonHelper: JsonHelper,
     private readonly restConnector: RestConnectorService,
     private readonly dbConnector: DbConnectorService,
     private readonly zabbixConnector: ZabbixConnectorService,
@@ -127,11 +129,9 @@ export class ConnectorRegistry implements OnModuleInit {
     });
 
     for (const ts of systems) {
-      const proxy = this.createProxy(
-        ts.type,
-        ts.name,
-        ts.config as unknown as Record<string, unknown>,
-      );
+      const config =
+        this.jsonHelper.fromJson<Record<string, unknown>>(ts.config) ?? {};
+      const proxy = this.createProxy(ts.type, ts.name, config);
       if (proxy) {
         this.connectors.set(ts.name, proxy);
         this.logger.log(`Registered target system: ${ts.name} (${ts.type})`);
@@ -196,7 +196,7 @@ export class ConnectorRegistry implements OnModuleInit {
       return undefined;
     }
 
-    return {
+    const proxy: Connector = {
       name,
       execute: async (payload: ConnectorPayload): Promise<ConnectorResult> => {
         return baseConnector.execute({
@@ -214,5 +214,11 @@ export class ConnectorRegistry implements OnModuleInit {
         return baseConnector.testConnection(config);
       },
     };
+
+    if (baseConnector.getCapabilities) {
+      proxy.getCapabilities = () => baseConnector.getCapabilities!();
+    }
+
+    return proxy;
   }
 }

@@ -19,7 +19,7 @@ export class KafkaProducerService implements OnModuleInit {
     const brokers = (
       this.config.get<string>('KAFKA_BROKERS') ?? 'localhost:9092'
     ).split(',');
-    const kafka = new Kafka({ clientId: 'idpmw-producer', brokers });
+    const kafka = new Kafka({ clientId: 'idmmw-producer', brokers });
     this.producer = kafka.producer();
     await this.producer.connect();
     this.logger.log(`Kafka producer connected to ${brokers.join(', ')}`);
