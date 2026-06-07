@@ -86,6 +86,7 @@ export class ProcessingService {
         error: msg,
         retryCount: 3,
       });
+      throw error;
     }
   }
 

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
 import {
@@ -8,11 +8,16 @@ import {
   ConnectorResult,
 } from '../../connector.interface';
 import { createConnectorCapabilities } from '../../connector.capabilities';
+import {
+  TlsConnectionConfig,
+  TlsOptionsFactory,
+} from '../../../security/tls-options.factory';
 
 export interface FakeConfig {
   baseUrl: string;
   apiKey?: string;
   timeout?: number;
+  tls?: TlsConnectionConfig;
 }
 
 @Injectable()
@@ -20,7 +25,10 @@ export class FakeConnectorService implements Connector {
   readonly name = 'fake';
   private readonly logger = new Logger(FakeConnectorService.name);
 
-  constructor(private readonly httpService: HttpService) {}
+  constructor(
+    private readonly httpService: HttpService,
+    @Optional() private readonly tlsOptions?: TlsOptionsFactory,
+  ) {}
 
   getCapabilities(): ConnectorCapabilities {
     return createConnectorCapabilities();
@@ -52,7 +60,15 @@ export class FakeConnectorService implements Connector {
             targetSystem: payload.targetSystem,
             data: payload.payload['data'] ?? {},
           },
-          { headers, timeout: config.timeout ?? 10000 },
+          {
+            headers,
+            timeout: config.timeout ?? 10000,
+            ...(this.tlsOptions?.axiosConfig(
+              config.baseUrl,
+              config.tls,
+              'Fake remote',
+            ) ?? {}),
+          },
         ),
       );
       this.logger.log(
@@ -313,6 +329,11 @@ export class FakeConnectorService implements Connector {
       const response = await lastValueFrom(
         this.httpService.get(`${cfg.baseUrl}/health`, {
           timeout: cfg.timeout ?? 5000,
+          ...(this.tlsOptions?.axiosConfig(
+            cfg.baseUrl,
+            cfg.tls,
+            'Fake remote',
+          ) ?? {}),
         }),
       );
       return {

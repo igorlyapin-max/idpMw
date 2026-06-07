@@ -6,6 +6,14 @@ import { IdempotencyStore } from '../idempotency.store.interface';
 export class PgIdempotencyStore implements IdempotencyStore {
   constructor(private readonly prisma: PrismaService) {}
 
+  async exists(key: string): Promise<boolean> {
+    const row = await this.prisma.idempotencyKey.findUnique({
+      where: { key },
+      select: { key: true },
+    });
+    return row !== null;
+  }
+
   async setIfNotExists(key: string, ttlSeconds: number): Promise<boolean> {
     try {
       await this.prisma.idempotencyKey.create({

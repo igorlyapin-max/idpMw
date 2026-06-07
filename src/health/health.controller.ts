@@ -6,6 +6,7 @@ import {
 } from '@nestjs/terminus';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../database/prisma.service';
+import { RedisIdempotencyStore } from '../core/idempotency/stores/redis-idempotency.store';
 
 @Controller('health')
 export class HealthController {
@@ -14,6 +15,7 @@ export class HealthController {
     private readonly prisma: PrismaHealthIndicator,
     private readonly prismaService: PrismaService,
     private readonly config: ConfigService,
+    private readonly redisStore: RedisIdempotencyStore,
   ) {}
 
   @Get()
@@ -21,20 +23,20 @@ export class HealthController {
   check() {
     return this.health.check([
       () => this.prisma.pingCheck('database', this.prismaService),
-      () =>
-        Promise.resolve({
-          redis: {
-            status: 'up',
-            enabled: this.config.get<boolean>('REDIS_ENABLED') ?? false,
-            mode: 'not_supported_in_current_build',
-          },
-        }),
+      () => this.redisStore.healthCheck(),
       () =>
         Promise.resolve({
           kafka: {
             status: 'up',
             enabled: this.config.get<boolean>('KAFKA_ENABLED') ?? false,
             brokers: this.config.get<string>('KAFKA_BROKERS') ?? null,
+            processingMode:
+              this.config.get<string>('IDMMW_PROCESSING_MODE') ?? 'sync',
+            topics: {
+              eventsIn: this.config.get<string>('KAFKA_TOPIC_EVENTS_IN'),
+              eventsOut: this.config.get<string>('KAFKA_TOPIC_EVENTS_OUT'),
+              dlqRetry: this.config.get<string>('KAFKA_TOPIC_DLQ_RETRY'),
+            },
           },
         }),
     ]);

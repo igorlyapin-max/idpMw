@@ -26,6 +26,8 @@ import { ProcessingService } from './processing.service';
     DlqService,
     AuditInterceptor,
     ProcessingService,
+    RedisIdempotencyStore,
+    PgIdempotencyStore,
   ],
 })
 export class CoreModule {}

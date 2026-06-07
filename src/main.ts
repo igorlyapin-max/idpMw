@@ -5,14 +5,25 @@ import { Logger } from 'nestjs-pino';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { DiagnosticLoggerService } from './diagnostics/diagnostic-logger.service';
+import { TlsOptionsFactory } from './security/tls-options.factory';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  const bootstrapConfig = {
+    get: (key: string) => process.env[key],
+  } as ConfigService;
+  const httpsOptions = new TlsOptionsFactory(
+    bootstrapConfig,
+  ).inboundHttpsOptions();
+  const app = await NestFactory.create(AppModule, {
+    bufferLogs: true,
+    ...(httpsOptions ? { httpsOptions: httpsOptions as never } : {}),
+  });
   app.useLogger(app.get(Logger));
   app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
 
   const configService = app.get(ConfigService);
   const port = configService.get<number>('PORT') ?? 3010;
+  const scheme = httpsOptions ? 'https' : 'http';
 
   const swaggerConfig = new DocumentBuilder()
     .setTitle('idmMw API')
@@ -27,15 +38,16 @@ async function bootstrap(): Promise<void> {
   await app.listen(port);
   const adminUiEnabled =
     configService.get<boolean>('ADMIN_UI_ENABLED') ?? false;
-  const uiUrl = adminUiEnabled ? `http://localhost:${port}/` : 'disabled';
+  const uiUrl = adminUiEnabled ? `${scheme}://localhost:${port}/` : 'disabled';
   const logger = app.get(Logger);
   const diagnostics = app.get(DiagnosticLoggerService);
   const startupInfo = {
-    app: `http://localhost:${port}`,
-    swagger: `http://localhost:${port}/api`,
-    metrics: `http://localhost:${port}/metrics`,
+    app: `${scheme}://localhost:${port}`,
+    swagger: `${scheme}://localhost:${port}/api`,
+    metrics: `${scheme}://localhost:${port}/metrics`,
     adminUi: uiUrl,
     grafana: 'http://localhost:3000',
+    httpTlsEnabled: Boolean(httpsOptions),
     debugLoggingEnabled: diagnostics.isEnabled(),
     debugLoggingLevel: diagnostics.level(),
     logSink: configService.get<string>('LOG_SINK') ?? 'stdout',
@@ -45,9 +57,9 @@ async function bootstrap(): Promise<void> {
 
   const shutdownMsg = [
     'Shutting down. Services were available at:',
-    `  App:       http://localhost:${port}`,
-    `  Swagger:   http://localhost:${port}/api`,
-    `  Metrics:   http://localhost:${port}/metrics`,
+    `  App:       ${scheme}://localhost:${port}`,
+    `  Swagger:   ${scheme}://localhost:${port}/api`,
+    `  Metrics:   ${scheme}://localhost:${port}/metrics`,
     `  Admin UI:  ${uiUrl}`,
     `  Grafana:   http://localhost:3000 (login: admin / code: admin)`,
   ].join('\n');

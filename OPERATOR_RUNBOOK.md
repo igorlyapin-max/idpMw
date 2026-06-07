@@ -5,10 +5,11 @@
 ## Содержание
 
 1. [Проверка здоровья](#проверка-здоровья)
-2. [DLQ: диагностика и ротация](#dlq-диагностика-и-ротация)
-3. [Ручной retry](#ручной-retry)
-4. [Мониторинг и алерты](#мониторинг-и-алерты)
-5. [Инциденты](#инциденты)
+2. [Security: TLS и шифрование](#security-tls-и-шифрование)
+3. [DLQ: диагностика и ротация](#dlq-диагностика-и-ротация)
+4. [Ручной retry](#ручной-retry)
+5. [Мониторинг и алерты](#мониторинг-и-алерты)
+6. [Инциденты](#инциденты)
 
 ## Проверка здоровья
 
@@ -28,12 +29,65 @@ curl -s http://localhost:3010/api-json | head -c 200
 
 ### Компоненты
 
-| Компонент  | Проверка                                       | Критичность                       |
-| ---------- | ---------------------------------------------- | --------------------------------- |
-| PostgreSQL | `pg_isready -U idmmw -d idmmw`                 | Критично                          |
-| Redis      | `/health` показывает `redis.enabled=false`     | Не реализован в текущей сборке    |
-| Kafka      | `/health` показывает `kafka.enabled` и brokers | Не критично (fallback синхронный) |
-| App        | `curl /health`                                 | Критично                          |
+| Компонент  | Проверка                                       | Критичность                                |
+| ---------- | ---------------------------------------------- | ------------------------------------------ |
+| PostgreSQL | `pg_isready -U idmmw -d idmmw`                 | Критично                                   |
+| Redis      | `/health` показывает `redis.enabled/status`    | Критично при `REDIS_ENABLED=true`          |
+| Kafka      | `/health` показывает `kafka.enabled` и brokers | Критично при `IDMMW_PROCESSING_MODE=async` |
+| App        | `curl /health`                                 | Критично                                   |
+
+## Security: TLS и шифрование
+
+Полный runbook: [docs/SECURITY_TLS_ENCRYPTION.md](docs/SECURITY_TLS_ENCRYPTION.md).
+
+### Первое включение шифрования
+
+Шифрование можно включать только на пустой системе. Перед запуском остановить
+workers и проверить отсутствие данных:
+
+```sql
+SELECT COUNT(*) FROM "AuditLog";
+SELECT COUNT(*) FROM "DlqItem";
+SELECT COUNT(*) FROM "TargetSystem";
+SELECT COUNT(*) FROM "IdempotencyKey" WHERE "expiresAt" > now();
+```
+
+Настроить keyring:
+
+```env
+ENCRYPTION_ENABLED=true
+ENCRYPTION_ACTIVE_KEY_ID=key_2026_06
+ENCRYPTION_KEYS=key_2026_06
+ENCRYPTION_KEY_KEY_2026_06=secret://idmmw-key-2026-06
+SECRETS_PROVIDER=IndeedPamAapm
+```
+
+После старта проверить:
+
+```sql
+SELECT "activeKeyId", "rotationStatus" FROM "EncryptionState";
+```
+
+### Замена ключа
+
+1. Добавить новый ключ в keyring, не удаляя старый.
+2. Остановить workers или дождаться drain.
+3. Проверить DLQ, active idempotency keys и Kafka lag.
+4. Запустить:
+
+```bash
+npm run security:rotate-key
+```
+
+5. Проверить:
+
+```sql
+SELECT "activeKeyId", "previousKeyIds", "rotationStatus", "rotatedAt"
+FROM "EncryptionState";
+```
+
+Старый ключ удалять только после завершения DB rotation, drain Kafka backlog и
+истечения Redis/idempotency TTL window.
 
 ## DLQ: диагностика и ротация
 
@@ -71,7 +125,7 @@ curl -X POST http://localhost:3010/admin/dlq/<id>/retry
 # 3. Skip (если ошибка необратима)
 curl -X POST http://localhost:3010/admin/dlq/<id>/skip
 
-# 4. Массовый retry всех pending (через SQL)
+# 4. Массовый retry всех pending (через SQL, только аварийно: API использует retry lease)
 docker exec idmmw-postgres psql -U idmmw -d idmmw -c '
   UPDATE "DlqItem" SET status = '"'"'retrying'"'"' WHERE status = '"'"'pending'"'"';
 '
@@ -90,7 +144,9 @@ curl -X POST http://localhost:3010/admin/dlq/<id>/retry
 # → {"success":true}
 ```
 
-При включённом Kafka событие отправляется в topic `idm.dlq.retry`.
+При включённом Kafka событие отправляется в topic из `KAFKA_TOPIC_DLQ_RETRY`
+и получает retry lease (`lockedAt`, `lockedBy`), чтобы несколько workers не
+забрали один и тот же DLQ item.
 
 ### Retry через SQL
 
@@ -144,9 +200,10 @@ Diagnostic logging включается без изменения кода:
 DebugLogging__Enabled=true DebugLogging__Level=Basic npm run start:dev
 DebugLogging__Enabled=true DebugLogging__Level=Verbose LOG_SINK=file npm run start:dev
 npm run test:runtime-smoke
+npm run test:ha-live
 ```
 
-`Basic` пишет безопасные diagnostic события маршрутизации. `Verbose` допускается только временно и маскирует секретные поля. `LOG_SINK=file` используется как второй JSON sink для collector/sidecar; smoke-проверка подтверждает startup, `/health`, `/metrics`, diagnostic events и redaction.
+`Basic` пишет безопасные diagnostic события маршрутизации. `Verbose` допускается только временно и маскирует секретные поля. `LOG_SINK=file` используется как второй JSON sink для collector/sidecar; smoke-проверка подтверждает startup, `/health`, `/metrics`, diagnostic events и redaction. `test:ha-live` дополнительно проверяет реальные Redis/Kafka контейнеры стенда.
 
 ## Инциденты
 
@@ -154,7 +211,7 @@ npm run test:runtime-smoke
 
 **Признак:** `idmmw_events_processed_total{status="success"}` растёт, но `idmmw_dlq_size` = 0, в AuditLog много записей с одинаковым eventId.
 
-**Действие:** Idempotency должен отсекать дубликаты автоматически. Проверить `IdempotencyKey` в БД.
+**Действие:** Idempotency должен отсекать дубликаты автоматически. Если `REDIS_ENABLED=false`, проверить `IdempotencyKey` в БД. Если `REDIS_ENABLED=true`, проверить ключ `avanpost:<eventId>` в Redis.
 
 ### Сценарий 2: Middleware падает mid-request
 
@@ -173,19 +230,20 @@ curl -s http://localhost:3010/admin/dlq?status=pending | jq 'length'
 
 ### Сценарий 3: Kafka lag растёт
 
-**Признак:** `kafka-consumer-groups --describe --group idmmw-dlq-retry-group` показывает растущий lag.
+**Признак:** `kafka-consumer-groups --describe --group $KAFKA_CONSUMER_GROUP_ID` показывает растущий lag.
 
 **Действие:**
 
 1. Проверить consumer логи на ошибки
 2. Увеличить количество consumer instances
-3. При необходимости — временно отключить Kafka (`KAFKA_ENABLED=false`) и перейти на синхронную обработку
+3. В sync режиме можно временно отключить Kafka (`KAFKA_ENABLED=false`)
+4. В async режиме сначала переключить `IDMMW_PROCESSING_MODE=sync`, затем отключать Kafka
 
 ### Сценарий 4: Redis недоступен
 
-**Признак:** startup error при `REDIS_ENABLED=true`.
+**Признак:** startup error или `/health` показывает `redis.status=down` при `REDIS_ENABLED=true`.
 
-**Действие:** В текущей сборке Redis idempotency store не реализован. Запуск с Redis запрещён fail-fast, чтобы не принимать все события как дубли.
+**Действие:** Проверить доступность Redis, host/port/password/db и сетевой маршрут. При аварийном fallback можно временно перейти на PostgreSQL idempotency store.
 
 ```bash
 # Проверить fallback

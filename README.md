@@ -8,10 +8,11 @@
 - **Frontend:** React 18, Vite, TypeScript
 - **Database:** PostgreSQL 15+ (dev) / CockroachDB или YugabyteDB (prod)
 - **ORM:** Prisma
-- **Cache/Lock:** PostgreSQL idempotency store; Redis зарезервирован, но не реализован в текущей сборке
+- **Cache/Lock:** PostgreSQL или Redis idempotency store
 - **Message Bus (опц.):** Apache Kafka 3.x
 - **Monitoring:** Prometheus + Grafana
 - **Logging:** pino (JSON) в stdout/stderr, опционально второй sink в JSON log file
+- **Security:** per-connection TLS, AES-256-GCM infrastructure encryption, keyring/key rotation
 
 ## Быстрый старт
 
@@ -43,6 +44,9 @@ npm run start:dev
 
 Backend доступен на `http://localhost:3010`.
 
+TLS для inbound API/Admin UI включается через `HTTP_TLS_ENABLED=true`; после
+этого endpoint доступен на `https://localhost:3010`.
+
 ### Сборка и запуск UI
 
 ```bash
@@ -67,18 +71,18 @@ docker compose -f docker-compose.monitoring.yml up -d
 
 ### Компоненты
 
-| Компонент          | Описание                                                    |
-| ------------------ | ----------------------------------------------------------- |
-| Webhook Controller | Приём событий от Avanpost IDM (`POST /webhooks/avanpost`)   |
-| Idempotency        | Предотвращение дубликатов через PostgreSQL `IdempotencyKey` |
-| Retry              | Экспоненциальный backoff, max 3 попытки                     |
-| DLQ                | Хранение неуспешных событий для ручной обработки            |
-| Audit              | Логирование всех входящих и исходящих вызовов               |
-| Dispatcher         | Маршрутизация событий → коннекторы                          |
-| Connectors         | REST, DB (SQL через knex), Zabbix, CMDBuild                 |
-| Kafka (опц.)       | Async producer/consumer для масштабирования                 |
-| Admin API          | DLQ management, Target Systems management                   |
-| Admin UI           | React-приложение для управления DLQ и Target Systems        |
+| Компонент          | Описание                                                                          |
+| ------------------ | --------------------------------------------------------------------------------- |
+| Webhook Controller | Приём событий от Avanpost IDM (`POST /webhooks/avanpost`)                         |
+| Idempotency        | Предотвращение дубликатов через PostgreSQL `IdempotencyKey` или Redis `SET NX EX` |
+| Retry              | Экспоненциальный backoff, max 3 попытки                                           |
+| DLQ                | Хранение неуспешных событий для ручной обработки                                  |
+| Audit              | Логирование всех входящих и исходящих вызовов                                     |
+| Dispatcher         | Маршрутизация событий → коннекторы                                                |
+| Connectors         | REST, DB (SQL через knex), Zabbix, CMDBuild                                       |
+| Kafka (опц.)       | Event mirror, DLQ retry и async worker pipeline                                   |
+| Admin API          | DLQ management, Target Systems management                                         |
+| Admin UI           | React-приложение для управления DLQ и Target Systems                              |
 
 ### IDM multi-target contract
 
@@ -138,8 +142,9 @@ Response semantics:
 Все опциональные компоненты управляются через env-переменные:
 
 ```env
-REDIS_ENABLED=false          # true запрещён до реализации Redis store
-KAFKA_ENABLED=false          # true для async messaging
+REDIS_ENABLED=false          # true включает Redis idempotency store
+KAFKA_ENABLED=false          # true включает Kafka producer/consumer
+IDMMW_PROCESSING_MODE=sync   # sync | async
 DB_CONNECTOR_ENABLED=false   # true для SQL-коннектора
 ADMIN_UI_ENABLED=true        # true для раздачи React UI
 DebugLogging__Enabled=false  # true для diagnostic logging
@@ -154,6 +159,20 @@ LOG_FILE_PATH=/tmp/idmmw.log # используется при LOG_SINK=file
 - **DlqItem** — неуспешные события (status: pending, retrying, skipped, resolved)
 - **IdempotencyKey** — ключи для deduplication
 - **TargetSystem** — конфигурация целевых систем (Zabbix, CMDBuild, REST, DB)
+- **EncryptionState** — состояние включенного шифрования и active key id
+
+## Security: TLS и шифрование
+
+Полная процедура включения TLS, первого запуска шифрования и key rotation:
+[docs/SECURITY_TLS_ENCRYPTION.md](docs/SECURITY_TLS_ENCRYPTION.md).
+
+Кратко:
+
+- TLS управляется отдельно для каждого соединения: `HTTP_TLS_*`, `REDIS_TLS_*`, `KAFKA_TLS_*`, `DB_CONNECTOR_TLS_*`, а для целевых систем через `config.tls`.
+- При `ENCRYPTION_ENABLED=true` шифруются audit/DLQ/TargetSystem JSON поля, Kafka payloads и idempotency keys через HMAC.
+- Первое включение шифрования допускается только на пустой системе.
+- Key rotation выполняется в maintenance mode командой `npm run security:rotate-key`.
+- Ключи должны быть base64 32 bytes; для Indeed PAM используйте `secret://...` значения в `ENCRYPTION_KEY_<KEY_ID>`.
 
 ## Легковесный режим (SQLite)
 
@@ -178,7 +197,7 @@ DATABASE_URL=file:./data/idmmw.db
 В lightweight режиме:
 
 - База данных — SQLite (файл `data/idmmw.db`)
-- Kafka и Redis автоматически отключены
+- Kafka и Redis по умолчанию отключены; для HA используйте PostgreSQL/YugabyteDB/CockroachDB плюс Redis/Kafka
 - Single worker (no clustering)
 - JSON поля хранятся как сериализованные строки
 
@@ -191,25 +210,39 @@ NODE_ENV=development
 
 # Database (обязательно)
 DATABASE_URL=postgresql://user:pass@host:port/db
+DATABASE_FLAVOR=postgresql   # postgresql | yugabytedb | cockroachdb
 
 # Redis (опционально)
-REDIS_ENABLED=false          # true сейчас запрещён: Redis store не реализован
+REDIS_ENABLED=false          # true включает Redis idempotency store
 REDIS_HOST=localhost
 REDIS_PORT=6379
+REDIS_DB=0
+REDIS_PASSWORD=
 # REDIS_SENTINEL_HOSTS=redis1:26379,redis2:26379,redis3:26379  # prod only
 
 # Kafka (опционально)
 KAFKA_ENABLED=false
 KAFKA_BROKERS=localhost:9092
+KAFKA_CLIENT_ID=idmmw
+KAFKA_CONSUMER_GROUP_ID=idmmw-worker-group
+KAFKA_TOPIC_EVENTS_IN=idm.events.in
+KAFKA_TOPIC_EVENTS_OUT=idm.events.out
+KAFKA_TOPIC_DLQ_RETRY=idm.dlq.retry
+IDMMW_PROCESSING_MODE=sync   # sync | async
+DLQ_RETRY_LEASE_SECONDS=300
 
 # DB Connector (опционально)
 DB_CONNECTOR_ENABLED=false
-DB_CONNECTOR_URL=postgresql://...
-DB_CONNECTOR_DIALECT=pg          # pg | mysql2 | sqlite3
+DB_CONNECTOR_URL=postgresql://... # для oracledb: host:1521/service
+DB_CONNECTOR_DIALECT=pg           # pg | mysql2 | sqlite3 | oracledb
+DB_CONNECTOR_USERNAME=            # требуется для oracledb
+DB_CONNECTOR_PASSWORD=            # требуется для oracledb
+DB_CONNECTOR_TLS_ENABLED=false
 
 # Admin UI
 ADMIN_UI_ENABLED=true
 ADMIN_UI_SERVE_STATIC=true
+HTTP_TLS_ENABLED=false
 
 # Mock IDM (только dev/test)
 MOCK_IDM_ENABLED=true
@@ -219,6 +252,38 @@ DebugLogging__Enabled=false
 DebugLogging__Level=Basic    # Basic | Verbose
 LOG_SINK=stdout              # stdout | file
 LOG_FILE_PATH=/tmp/idmmw.log
+
+# Security
+ENCRYPTION_ENABLED=false
+ENCRYPTION_ACTIVE_KEY_ID=key_2026_06
+ENCRYPTION_KEYS=key_2026_06
+ENCRYPTION_KEY_KEY_2026_06=       # base64 32 bytes или secret://...
+```
+
+Oracle DB connector использует `oracledb` Thin mode, поэтому Oracle Instant
+Client не требуется для базового подключения. Для runtime-конфигурации
+`DB_CONNECTOR_URL` задается как `connectString`, например `host:1521/service`.
+
+## HA deployment modes
+
+| Режим               | Конфигурация                                                                                   | Поведение                                                                                                                       |
+| ------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Single-node sync    | `IDMMW_PROCESSING_MODE=sync`, `KAFKA_ENABLED=false`, `REDIS_ENABLED=false`                     | Текущий простой режим: запрос IDM сразу вызывает целевую систему, deduplication в БД.                                           |
+| Multi-worker sync   | `IDMMW_PROCESSING_MODE=sync`, общая PostgreSQL-compatible БД, опционально `REDIS_ENABLED=true` | Несколько процессов принимают webhook; duplicate `eventId` отсекается через БД или Redis.                                       |
+| Async Kafka workers | `IDMMW_PROCESSING_MODE=async`, `KAFKA_ENABLED=true`                                            | Write-события кладутся в `KAFKA_TOPIC_EVENTS_IN`, worker group обрабатывает их, статусы публикуются в `KAFKA_TOPIC_EVENTS_OUT`. |
+| DLQ retry workers   | `KAFKA_ENABLED=true`, `KAFKA_TOPIC_DLQ_RETRY=idm.dlq.retry`                                    | Ручной retry получает lease на `DlqItem`, публикует событие в Kafka и worker помечает item `resolved` при успехе.               |
+
+DB compatibility:
+
+- PostgreSQL: основной production provider `provider = "postgresql"`.
+- YugabyteDB: используется как PostgreSQL-compatible YSQL backend через текущий Prisma `provider = "postgresql"` и обычный PostgreSQL DSN.
+- CockroachDB: используйте `prisma/schema.cockroach.prisma` с Prisma `provider = "cockroachdb"` и проверяйте его через `npm run db:validate:cockroach` перед rollout.
+
+Live HA проверка на текущем стенде:
+
+```bash
+# Использует Redis 127.0.0.1:16379 и Kafka 127.0.0.1:9092
+npm run test:ha-live
 ```
 
 ## API Endpoints
@@ -277,6 +342,9 @@ npm run test:e2e:sqlite
 # Verbose diagnostics, redaction and file log sink
 npm run test:runtime-smoke
 
+# Live HA smoke: real Redis + real Kafka containers
+npm run test:ha-live
+
 # Full local validation gate
 ./scripts/validate-structure.sh
 
@@ -321,9 +389,9 @@ tail -f /tmp/idmmw.log
 
 ### Redis недоступен
 
-- Текущая сборка использует PostgreSQL idempotency store.
-- `REDIS_ENABLED=true` завершает startup ошибкой, потому что Redis store не реализован и не должен молча принимать события в неверном режиме.
-- Для dev/test/prod pilot оставляйте `REDIS_ENABLED=false`.
+- При `REDIS_ENABLED=false` используется PostgreSQL `IdempotencyKey`.
+- При `REDIS_ENABLED=true` startup подключается к `REDIS_HOST:REDIS_PORT`; если Redis недоступен, startup/health падают.
+- Для локального стенда live smoke ожидает Redis на `127.0.0.1:16379`.
 
 ### Diagnostic logging
 

@@ -8,11 +8,9 @@ import type { AvanpostWebhookDto } from '../inbound/webhooks/webhook.controller'
  * DispatcherService — the bridge between inbound webhooks and the processing layer.
  *
  * Responsibilities:
- *   1. Call ProcessingService to execute the event against the target connector
- *   2. Emit an async Kafka message (only when KAFKA_ENABLED=true)
- *
- * In lightweight mode (LIGHTWEIGHT_MODE=true) Kafka is disabled;
- * the dispatcher works synchronously without losing functionality.
+ *   1. In sync mode, call ProcessingService to execute the event immediately.
+ *   2. In async mode, enqueue write events to Kafka for worker consumers.
+ *   3. Optionally emit status messages to the Kafka out topic.
  */
 @Injectable()
 export class DispatcherService {
@@ -41,6 +39,28 @@ export class DispatcherService {
    */
   async dispatch(dto: AvanpostWebhookDto): Promise<void> {
     const kafkaEnabled = this.config.get<boolean>('KAFKA_ENABLED') ?? false;
+    const processingMode =
+      this.config.get<string>('IDMMW_PROCESSING_MODE') ?? 'sync';
+    const eventsInTopic =
+      this.config.get<string>('KAFKA_TOPIC_EVENTS_IN') ?? 'idm.events.in';
+    const eventsOutTopic =
+      this.config.get<string>('KAFKA_TOPIC_EVENTS_OUT') ?? 'idm.events.out';
+
+    if (processingMode === 'async') {
+      if (!kafkaEnabled) {
+        throw new Error('Async processing mode requires KAFKA_ENABLED=true');
+      }
+      await this.kafkaProducer.send(eventsInTopic, {
+        eventId: dto.eventId,
+        operation: dto.operation,
+        targetSystem: dto.targetSystem,
+        payload: dto.payload,
+      });
+      this.logger.log(
+        `Dispatch queued event ${dto.eventId} to Kafka topic ${eventsInTopic}`,
+      );
+      return;
+    }
 
     try {
       // Core execution: route to the concrete connector via registry lookup.
@@ -54,7 +74,7 @@ export class DispatcherService {
 
       // Optional: emit async success event for external consumers.
       if (kafkaEnabled) {
-        await this.kafkaProducer.send('idm.events.out', {
+        await this.kafkaProducer.send(eventsOutTopic, {
           eventId: dto.eventId,
           operation: dto.operation,
           targetSystem: dto.targetSystem,
@@ -67,7 +87,7 @@ export class DispatcherService {
 
       // Optional: emit async failure event for external consumers / alerting.
       if (kafkaEnabled) {
-        await this.kafkaProducer.send('idm.events.out', {
+        await this.kafkaProducer.send(eventsOutTopic, {
           eventId: dto.eventId,
           operation: dto.operation,
           targetSystem: dto.targetSystem,

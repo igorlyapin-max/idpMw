@@ -5,6 +5,7 @@ import { JsonHelper } from '../database/json.helper';
 import { DlqService } from '../core/dlq/dlq.service';
 import { KafkaProducerService } from '../kafka/kafka-producer.service';
 import { MetricsService } from '../metrics/metrics.service';
+import { ConfigService } from '@nestjs/config';
 
 describe('AdminService', () => {
   let service: AdminService;
@@ -19,6 +20,7 @@ describe('AdminService', () => {
   let dlq: { retry: jest.Mock; skip: jest.Mock };
   let kafkaProducer: { send: jest.Mock };
   let metrics: { setDlqSize: jest.Mock };
+  let config: { get: jest.Mock };
 
   beforeEach(async () => {
     prisma = {
@@ -29,9 +31,14 @@ describe('AdminService', () => {
       },
     };
     jsonHelper = { fromJson: jest.fn((v: unknown) => v) };
-    dlq = { retry: jest.fn(), skip: jest.fn() };
+    dlq = { retry: jest.fn().mockResolvedValue(true), skip: jest.fn() };
     kafkaProducer = { send: jest.fn() };
     metrics = { setDlqSize: jest.fn() };
+    config = {
+      get: jest.fn((key: string) =>
+        key === 'KAFKA_TOPIC_DLQ_RETRY' ? 'idm.test.dlq.retry' : undefined,
+      ),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -41,6 +48,7 @@ describe('AdminService', () => {
         { provide: DlqService, useValue: dlq },
         { provide: KafkaProducerService, useValue: kafkaProducer },
         { provide: MetricsService, useValue: metrics },
+        { provide: ConfigService, useValue: config },
       ],
     }).compile();
 
@@ -66,7 +74,20 @@ describe('AdminService', () => {
     });
     await service.retry('1');
     expect(dlq.retry).toHaveBeenCalledWith('1');
-    expect(kafkaProducer.send).toHaveBeenCalled();
+    expect(kafkaProducer.send).toHaveBeenCalledWith(
+      'idm.test.dlq.retry',
+      expect.objectContaining({ dlqItemId: '1', eventId: 'e1' }),
+    );
+  });
+
+  it('retry should reject already claimed DLQ item', async () => {
+    dlq.retry.mockResolvedValue(false);
+
+    await expect(service.retry('1')).rejects.toThrow(
+      'DLQ item 1 is already retrying',
+    );
+
+    expect(kafkaProducer.send).not.toHaveBeenCalled();
   });
 
   it('skip should call dlq.skip', async () => {

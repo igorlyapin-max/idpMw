@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
 import {
@@ -8,6 +8,10 @@ import {
   ConnectorResult,
 } from '../../connector.interface';
 import { createConnectorCapabilities } from '../../connector.capabilities';
+import {
+  TlsConnectionConfig,
+  TlsOptionsFactory,
+} from '../../../security/tls-options.factory';
 
 export interface ZabbixConfig {
   baseUrl: string;
@@ -17,6 +21,7 @@ export interface ZabbixConfig {
   apiVersion?: string;
   enableGroupId?: string;
   disableGroupId?: string;
+  tls?: TlsConnectionConfig;
 }
 
 interface ZabbixAuth {
@@ -47,7 +52,10 @@ export class ZabbixConnectorService implements Connector {
   readonly name = 'zabbix';
   private readonly logger = new Logger(ZabbixConnectorService.name);
 
-  constructor(private readonly httpService: HttpService) {}
+  constructor(
+    private readonly httpService: HttpService,
+    @Optional() private readonly tlsOptions?: TlsOptionsFactory,
+  ) {}
 
   getCapabilities(): ConnectorCapabilities {
     return createConnectorCapabilities(ZABBIX_PARTIAL_OPERATIONS, {
@@ -85,11 +93,7 @@ export class ZabbixConnectorService implements Connector {
             error: 'Missing groupId or userId for group member operation',
           };
         }
-        const currentUsers = await this.getGroupUsers(
-          config.baseUrl,
-          groupId,
-          auth,
-        );
+        const currentUsers = await this.getGroupUsers(config, groupId, auth);
         let updatedUsers: Array<{ userid: string }>;
         if (operation === 'group.addMember') {
           if (!currentUsers.find((u) => u.userid === userId)) {
@@ -101,7 +105,7 @@ export class ZabbixConnectorService implements Connector {
           updatedUsers = currentUsers.filter((u) => u.userid !== userId);
         }
         const response = await this.call(
-          config.baseUrl,
+          config,
           'usergroup.update',
           { usrgrpid: groupId, users: updatedUsers },
           auth,
@@ -120,12 +124,7 @@ export class ZabbixConnectorService implements Connector {
           ? undefined
           : await this.resolveAuth(config);
 
-      const response = await this.call(
-        config.baseUrl,
-        method,
-        zabbixParams,
-        auth,
-      );
+      const response = await this.call(config, method, zabbixParams, auth);
       this.logger.log(`Zabbix ${method} succeeded`);
       return { success: true, data: response };
     } catch (error: unknown) {
@@ -219,7 +218,7 @@ export class ZabbixConnectorService implements Connector {
             filter: {
               username: (data['username'] ?? params['username']) as string,
             },
-            output: ['userid'],
+            output: ['userid', 'username', 'name', 'surname'],
           },
         };
 
@@ -314,12 +313,12 @@ export class ZabbixConnectorService implements Connector {
   }
 
   private async getGroupUsers(
-    baseUrl: string,
+    config: ZabbixConfig,
     groupId: string,
     auth: ZabbixAuth,
   ): Promise<Array<{ userid: string }>> {
     const response = (await this.call(
-      baseUrl,
+      config,
       'usergroup.get',
       {
         usrgrpids: [groupId],
@@ -348,7 +347,7 @@ export class ZabbixConnectorService implements Connector {
   }
 
   private async login(config: ZabbixConfig): Promise<string> {
-    const response = await this.call(config.baseUrl, 'user.login', {
+    const response = await this.call(config, 'user.login', {
       username: config.username,
       password: config.password,
     });
@@ -359,7 +358,7 @@ export class ZabbixConnectorService implements Connector {
   }
 
   private async call(
-    baseUrl: string,
+    config: ZabbixConfig,
     method: string,
     params: unknown,
     auth?: ZabbixAuth,
@@ -373,7 +372,7 @@ export class ZabbixConnectorService implements Connector {
     };
 
     const response = await lastValueFrom(
-      this.httpService.post(`${baseUrl}/api_jsonrpc.php`, body, {
+      this.httpService.post(`${config.baseUrl}/api_jsonrpc.php`, body, {
         headers: {
           'Content-Type': 'application/json',
           ...(auth?.mode === 'bearer'
@@ -381,6 +380,11 @@ export class ZabbixConnectorService implements Connector {
             : {}),
         },
         timeout: 30000,
+        ...(this.tlsOptions?.axiosConfig(
+          config.baseUrl,
+          config.tls,
+          'Zabbix',
+        ) ?? {}),
       }),
     );
 
@@ -406,7 +410,7 @@ export class ZabbixConnectorService implements Connector {
 
     try {
       const auth = cfg.apiToken ? await this.resolveAuth(cfg) : undefined;
-      await this.call(cfg.baseUrl, 'apiinfo.version', {}, auth);
+      await this.call(cfg, 'apiinfo.version', {}, auth);
       return { success: true, message: 'Zabbix API reachable' };
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);

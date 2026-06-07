@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../database/prisma.service';
 import { JsonHelper } from '../database/json.helper';
 import { DlqService } from '../core/dlq/dlq.service';
@@ -13,6 +14,7 @@ export class AdminService {
     private readonly dlq: DlqService,
     private readonly kafkaProducer: KafkaProducerService,
     private readonly metrics: MetricsService,
+    private readonly config: ConfigService,
   ) {}
 
   async findDlqItems(params: {
@@ -39,15 +41,24 @@ export class AdminService {
   }
 
   async retry(id: string): Promise<void> {
-    await this.dlq.retry(id);
+    const claimed = await this.dlq.retry(id);
+    if (!claimed) {
+      throw new Error(
+        `DLQ item ${id} is already retrying, skipped, or resolved`,
+      );
+    }
     const item = await this.prisma.dlqItem.findUnique({ where: { id } });
     if (item) {
-      await this.kafkaProducer.send('idm.dlq.retry', {
-        eventId: item.eventId,
-        operation: item.operation,
-        targetSystem: item.targetSystem,
-        payload: this.jsonHelper.fromJson(item.payload),
-      });
+      await this.kafkaProducer.send(
+        this.config.get<string>('KAFKA_TOPIC_DLQ_RETRY') ?? 'idm.dlq.retry',
+        {
+          dlqItemId: item.id,
+          eventId: item.eventId,
+          operation: item.operation,
+          targetSystem: item.targetSystem,
+          payload: this.jsonHelper.fromJson(item.payload),
+        },
+      );
     }
     await this.updateDlqMetrics();
   }

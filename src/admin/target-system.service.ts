@@ -57,7 +57,7 @@ export class TargetSystemService {
   }
 
   async create(dto: CreateTargetSystemDto) {
-    return this.prisma.targetSystem.create({
+    const item = await this.prisma.targetSystem.create({
       data: {
         name: dto.name,
         type: dto.type,
@@ -67,10 +67,14 @@ export class TargetSystemService {
         enabled: dto.enabled ?? true,
       },
     });
+    return {
+      ...item,
+      config: this.jsonHelper.fromJson<Record<string, unknown>>(item.config),
+    };
   }
 
   async update(id: string, dto: UpdateTargetSystemDto) {
-    return this.prisma.targetSystem.update({
+    const item = await this.prisma.targetSystem.update({
       where: { id },
       data: {
         ...(dto.name !== undefined ? { name: dto.name } : {}),
@@ -85,10 +89,18 @@ export class TargetSystemService {
         ...(dto.enabled !== undefined ? { enabled: dto.enabled } : {}),
       },
     });
+    return {
+      ...item,
+      config: this.jsonHelper.fromJson<Record<string, unknown>>(item.config),
+    };
   }
 
   async delete(id: string) {
-    return this.prisma.targetSystem.delete({ where: { id } });
+    const item = await this.prisma.targetSystem.delete({ where: { id } });
+    return {
+      ...item,
+      config: this.jsonHelper.fromJson<Record<string, unknown>>(item.config),
+    };
   }
 
   async testConnection(

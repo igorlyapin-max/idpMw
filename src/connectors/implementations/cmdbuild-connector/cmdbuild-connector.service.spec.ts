@@ -6,6 +6,24 @@ import { AVANPOST_OPERATION_VALUES } from '../../../inbound/webhooks/avanpost-op
 
 const changeCredentialOperation = ['user.change', 'P' + 'assword'].join('');
 
+const cmdbuildFilterPath = (
+  path: string,
+  attribute: string,
+  value: string,
+  operator: 'equal' | 'like' = 'like',
+): string => {
+  const filter = JSON.stringify({
+    attribute: {
+      simple: {
+        attribute,
+        operator,
+        value: [value],
+      },
+    },
+  });
+  return `${path}?${new URLSearchParams({ filter }).toString()}`;
+};
+
 const cmdbuildRequestMatrix: Array<{
   operation: string;
   method: string;
@@ -26,7 +44,7 @@ const cmdbuildRequestMatrix: Array<{
   },
   {
     operation: 'user.delete',
-    method: 'DELETE',
+    method: 'PUT',
     path: '/users/13',
     payload: { params: { id: '13' } },
   },
@@ -39,7 +57,7 @@ const cmdbuildRequestMatrix: Array<{
   {
     operation: 'user.search',
     method: 'GET',
-    path: '/users?filter=admin',
+    path: cmdbuildFilterPath('/users', 'username', 'admin'),
     payload: { params: { filter: 'admin' } },
   },
   {
@@ -68,14 +86,14 @@ const cmdbuildRequestMatrix: Array<{
   },
   {
     operation: changeCredentialOperation,
-    method: 'POST',
-    path: '/users/13/password',
+    method: 'PUT',
+    path: '/users/13',
     payload: { params: { id: '13' }, data: { newValue: 'new-secret' } },
   },
   {
     operation: 'user.resolve',
     method: 'GET',
-    path: '/users?filter=jdoe',
+    path: cmdbuildFilterPath('/users', 'username', 'jdoe', 'equal'),
     payload: { params: { username: 'jdoe' } },
   },
   {
@@ -104,7 +122,7 @@ const cmdbuildRequestMatrix: Array<{
   },
   {
     operation: 'group.delete',
-    method: 'DELETE',
+    method: 'PUT',
     path: '/roles/5',
     payload: { params: { id: '5' } },
   },
@@ -117,7 +135,7 @@ const cmdbuildRequestMatrix: Array<{
   {
     operation: 'group.search',
     method: 'GET',
-    path: '/roles?filter=Admins',
+    path: '/roles?limit=500',
     payload: { params: { filter: 'Admins' } },
   },
   { operation: 'system.test', method: 'GET', path: '/classes' },
@@ -170,6 +188,11 @@ describe('CmdbuildConnectorService', () => {
         expect.objectContaining({ status: 'partial' }),
       );
       expect(capabilities.partialOperations?.['user.lock']).toBeDefined();
+      expect(
+        capabilities.partialOperations?.['user.changePassword'],
+      ).toBeDefined();
+      expect(capabilities.partialOperations?.['group.search']).toBeDefined();
+      expect(capabilities.partialOperations?.['group.addMember']).toBeDefined();
       expect(capabilities.partialOperations?.['schema.get']).toBeDefined();
     });
 
@@ -244,7 +267,11 @@ describe('CmdbuildConnectorService', () => {
       expect(httpService.request).toHaveBeenCalledWith(
         expect.objectContaining({
           method: 'GET',
-          url: 'http://c/cmdbuild/services/rest/v3/users?filter=admin',
+          url: `http://c/cmdbuild/services/rest/v3${cmdbuildFilterPath(
+            '/users',
+            'username',
+            'admin',
+          )}`,
         }),
       );
     });
@@ -269,7 +296,9 @@ describe('CmdbuildConnectorService', () => {
     });
 
     it('should disable user via PUT /users/{id}', async () => {
-      httpService.request.mockReturnValue(of({ data: {} }));
+      httpService.request.mockReturnValue(
+        of({ data: { data: { _id: 13, active: true } } }),
+      );
       await service.execute({
         operation: 'user.disable',
         targetSystem: 'cmdbuild',
@@ -278,10 +307,34 @@ describe('CmdbuildConnectorService', () => {
           params: { id: '13' },
         },
       });
-      expect(httpService.request).toHaveBeenCalledWith(
+      expect(httpService.request).toHaveBeenLastCalledWith(
         expect.objectContaining({
           method: 'PUT',
-          data: { active: false },
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+          data: expect.objectContaining({ active: false }),
+        }),
+      );
+    });
+
+    it('should change password via merged PUT /users/{id}', async () => {
+      httpService.request.mockReturnValue(
+        of({ data: { data: { _id: 13, username: 'jdoe', active: true } } }),
+      );
+      await service.execute({
+        operation: changeCredentialOperation,
+        targetSystem: 'cmdbuild',
+        payload: {
+          config: { baseUrl: 'http://c', username: 'u', password: 'p' },
+          params: { id: '13' },
+          data: { newValue: 'new-secret' },
+        },
+      });
+      expect(httpService.request).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          method: 'PUT',
+          url: 'http://c/cmdbuild/services/rest/v3/users/13',
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+          data: expect.objectContaining({ password: 'new-secret' }),
         }),
       );
     });
@@ -305,9 +358,48 @@ describe('CmdbuildConnectorService', () => {
       );
     });
 
+    it('should search roles with bounded client-side filtering', async () => {
+      httpService.request.mockReturnValue(
+        of({
+          data: {
+            data: [
+              { _id: 1, name: 'Admins', description: 'Administrators' },
+              { _id: 2, name: 'Users', description: 'Users' },
+            ],
+            meta: { total: 2 },
+          },
+        }),
+      );
+      const result = await service.execute({
+        operation: 'group.search',
+        targetSystem: 'cmdbuild',
+        payload: {
+          config: { baseUrl: 'http://c', username: 'u', password: 'p' },
+          params: { filter: 'Admin', limit: 10 },
+        },
+      });
+
+      expect(result.success).toBe(true);
+      expect(httpService.request).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: 'GET',
+          url: 'http://c/cmdbuild/services/rest/v3/roles?limit=500',
+        }),
+      );
+      expect(result.data).toEqual(
+        expect.objectContaining({
+          data: [{ _id: 1, name: 'Admins', description: 'Administrators' }],
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+          meta: expect.objectContaining({ total: 1 }),
+        }),
+      );
+    });
+
     it('should add member preserving existing users', async () => {
       httpService.request
-        .mockReturnValueOnce(of({ data: { data: [{ _id: 2 }] } }))
+        .mockReturnValueOnce(
+          of({ data: { data: { _id: 1, userGroups: [{ _id: 2 }] } } }),
+        )
         .mockReturnValueOnce(of({ data: { data: {} } }));
       const result = await service.execute({
         operation: 'group.addMember',
@@ -325,14 +417,23 @@ describe('CmdbuildConnectorService', () => {
         url: string;
         data: unknown;
       };
-      expect(req.method).toBe('POST');
-      expect(req.url).toBe('http://c/cmdbuild/services/rest/v3/roles/5/users');
-      expect(req.data).toEqual({ users: [{ _id: 2 }, { _id: '1' }] });
+      expect(req.method).toBe('PUT');
+      expect(req.url).toBe('http://c/cmdbuild/services/rest/v3/users/1');
+      expect(req.data).toEqual({
+        _id: 1,
+        userGroups: [{ _id: 2 }, { _id: '5' }],
+      });
     });
 
     it('should remove member preserving other users', async () => {
       httpService.request
-        .mockReturnValueOnce(of({ data: { data: [{ _id: 1 }, { _id: 2 }] } }))
+        .mockReturnValueOnce(
+          of({
+            data: {
+              data: { _id: 1, userGroups: [{ _id: 5 }, { _id: 2 }] },
+            },
+          }),
+        )
         .mockReturnValueOnce(of({ data: { data: {} } }));
       const result = await service.execute({
         operation: 'group.removeMember',
@@ -350,9 +451,12 @@ describe('CmdbuildConnectorService', () => {
         url: string;
         data: unknown;
       };
-      expect(req.method).toBe('POST');
-      expect(req.url).toBe('http://c/cmdbuild/services/rest/v3/roles/5/users');
-      expect(req.data).toEqual({ users: [{ _id: 2 }] });
+      expect(req.method).toBe('PUT');
+      expect(req.url).toBe('http://c/cmdbuild/services/rest/v3/users/1');
+      expect(req.data).toEqual({
+        _id: 1,
+        userGroups: [{ _id: 2 }],
+      });
     });
 
     it('should return error on http failure', async () => {

@@ -3,6 +3,7 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import knex, { Knex } from 'knex';
@@ -11,6 +12,27 @@ import {
   ConnectorPayload,
   ConnectorResult,
 } from '../../connector.interface';
+import {
+  DbConnectorTlsConfig,
+  TlsOptionsFactory,
+} from '../../../security/tls-options.factory';
+
+type DbConnectorPoolConfig = { min: number; max: number };
+
+interface DbConnectorKnexInput {
+  client?: string;
+  connection?: string;
+  connectString?: string;
+  username?: string;
+  user?: string;
+  password?: string;
+  pool?: DbConnectorPoolConfig;
+  tls?: DbConnectorTlsConfig;
+}
+
+type DbConnectorKnexConfigResult =
+  | { success: true; client: string; config: Knex.Config }
+  | { success: false; error: string };
 
 @Injectable()
 export class DbConnectorService
@@ -20,7 +42,10 @@ export class DbConnectorService
   private readonly logger = new Logger(DbConnectorService.name);
   private knex: Knex | undefined;
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    @Optional() private readonly tlsOptions?: TlsOptionsFactory,
+  ) {}
 
   // eslint-disable-next-line @typescript-eslint/require-await
   async onModuleInit(): Promise<void> {
@@ -30,23 +55,28 @@ export class DbConnectorService
       return;
     }
 
-    const client = this.config.get<string>('DB_CONNECTOR_DIALECT');
-    const connection = this.config.get<string>('DB_CONNECTOR_URL');
+    const knexConfig = this.buildKnexConfig(
+      {
+        client: this.config.get<string>('DB_CONNECTOR_DIALECT'),
+        connection: this.config.get<string>('DB_CONNECTOR_URL'),
+        username: this.config.get<string>('DB_CONNECTOR_USERNAME'),
+        password: this.config.get<string>('DB_CONNECTOR_PASSWORD'),
+        pool: { min: 1, max: 5 },
+        tls: this.tlsOptions?.dbConnectorTlsFromEnv(),
+      },
+      'runtime',
+    );
 
-    if (!client || !connection) {
-      this.logger.error(
-        'DB_CONNECTOR_DIALECT and DB_CONNECTOR_URL are required when DB_CONNECTOR_ENABLED=true',
-      );
+    if (!knexConfig.success) {
+      this.logger.error(knexConfig.error);
       return;
     }
 
-    this.knex = knex({
-      client,
-      connection,
-      pool: { min: 1, max: 5 },
-    });
+    this.knex = knex(knexConfig.config);
 
-    this.logger.log(`DB connector initialized with dialect: ${client}`);
+    this.logger.log(
+      `DB connector initialized with dialect: ${knexConfig.client}`,
+    );
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -120,23 +150,29 @@ export class DbConnectorService
   async testConnection(
     config: Record<string, unknown>,
   ): Promise<{ success: boolean; message: string }> {
-    const client = config['client'] as string | undefined;
-    const connection = config['connection'] as string | undefined;
-    if (!client || !connection) {
-      return {
-        success: false,
-        message: 'Missing client or connection in config',
-      };
+    const knexConfig = this.buildKnexConfig(
+      {
+        client: config['client'] as string | undefined,
+        connection: config['connection'] as string | undefined,
+        connectString: config['connectString'] as string | undefined,
+        username: config['username'] as string | undefined,
+        user: config['user'] as string | undefined,
+        password: config['password'] as string | undefined,
+        pool: { min: 1, max: 2 },
+        tls: config['tls'] as DbConnectorTlsConfig | undefined,
+      },
+      'dynamic',
+    );
+    if (!knexConfig.success) {
+      return { success: false, message: knexConfig.error };
     }
 
-    let testKnex: ReturnType<typeof import('knex').default> | undefined;
+    let testKnex: Knex | undefined;
     try {
-      testKnex = (await import('knex')).default({
-        client,
-        connection,
-        pool: { min: 1, max: 2 },
-      });
-      await testKnex.raw('SELECT 1');
+      testKnex = knex(knexConfig.config);
+      await testKnex.raw(
+        knexConfig.client === 'oracledb' ? 'SELECT 1 FROM DUAL' : 'SELECT 1',
+      );
       return { success: true, message: 'DB connection OK' };
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -144,5 +180,106 @@ export class DbConnectorService
     } finally {
       await testKnex?.destroy();
     }
+  }
+
+  private buildKnexConfig(
+    input: DbConnectorKnexInput,
+    source: 'runtime' | 'dynamic',
+  ): DbConnectorKnexConfigResult {
+    const client = input.client;
+    const connection = input.connectString ?? input.connection;
+    const pool = input.pool ?? { min: 1, max: 5 };
+    const ssl = this.tlsOptions?.dbConnectorSslOptions(input.tls);
+
+    if (!client || !connection) {
+      return {
+        success: false,
+        error:
+          source === 'runtime'
+            ? 'DB_CONNECTOR_DIALECT and DB_CONNECTOR_URL are required when DB_CONNECTOR_ENABLED=true'
+            : 'Missing client and connection/connectString in config',
+      };
+    }
+
+    if (client === 'sqlite3') {
+      if (ssl) {
+        return {
+          success: false,
+          error: 'SQLite DB connector does not support TLS',
+        };
+      }
+      return {
+        success: true,
+        client,
+        config: { client, connection, pool },
+      };
+    }
+
+    if (client === 'pg') {
+      return {
+        success: true,
+        client,
+        config: {
+          client,
+          connection: ssl ? { connectionString: connection, ssl } : connection,
+          pool,
+        },
+      };
+    }
+
+    if (client === 'mysql2') {
+      return {
+        success: true,
+        client,
+        config: {
+          client,
+          connection: ssl ? { uri: connection, ssl } : connection,
+          pool,
+        },
+      };
+    }
+
+    const user = input.username ?? input.user;
+    if (!user || !input.password) {
+      return {
+        success: false,
+        error:
+          source === 'runtime'
+            ? 'Oracle DB connector requires DB_CONNECTOR_USERNAME and DB_CONNECTOR_PASSWORD'
+            : 'Oracle DB connector requires username/user and password',
+      };
+    }
+
+    if (
+      ssl &&
+      !connection.toLowerCase().startsWith('tcps:') &&
+      !connection.toLowerCase().includes('protocol=tcps')
+    ) {
+      return {
+        success: false,
+        error:
+          'Oracle DB connector TLS requires a TCPS connect string (tcps://... or PROTOCOL=TCPS)',
+      };
+    }
+
+    return {
+      success: true,
+      client,
+      config: {
+        client,
+        connection: {
+          connectString: connection,
+          user,
+          password: input.password,
+          ...(input.tls?.walletLocation
+            ? { walletLocation: input.tls.walletLocation }
+            : {}),
+          ...(input.tls?.walletPassword
+            ? { walletPassword: input.tls.walletPassword }
+            : {}),
+        },
+        pool,
+      },
+    };
   }
 }

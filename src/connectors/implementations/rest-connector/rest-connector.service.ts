@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
 import {
@@ -6,23 +6,42 @@ import {
   ConnectorPayload,
   ConnectorResult,
 } from '../../connector.interface';
+import {
+  TlsConnectionConfig,
+  TlsOptionsFactory,
+} from '../../../security/tls-options.factory';
+
+interface RestConnectorConfig {
+  baseUrl?: string;
+  tls?: TlsConnectionConfig;
+}
 
 @Injectable()
 export class RestConnectorService implements Connector {
   readonly name = 'rest';
   private readonly logger = new Logger(RestConnectorService.name);
 
-  constructor(private readonly httpService: HttpService) {}
+  constructor(
+    private readonly httpService: HttpService,
+    @Optional() private readonly tlsOptions?: TlsOptionsFactory,
+  ) {}
 
   async execute(payload: ConnectorPayload): Promise<ConnectorResult> {
     const targetUrl = payload.payload['url'] as string | undefined;
+    const config = payload.payload['config'] as RestConnectorConfig | undefined;
     if (!targetUrl) {
       return { success: false, error: 'Missing target URL in payload' };
     }
 
     try {
       const response = await lastValueFrom(
-        this.httpService.post(targetUrl, payload.payload['data'] ?? {}),
+        this.httpService.post(targetUrl, payload.payload['data'] ?? {}, {
+          ...(this.tlsOptions?.axiosConfig(
+            targetUrl,
+            config?.tls,
+            'REST target',
+          ) ?? {}),
+        }),
       );
       this.logger.log(
         `REST call to ${targetUrl} succeeded: ${response.status}`,
@@ -38,14 +57,19 @@ export class RestConnectorService implements Connector {
   async testConnection(
     config: Record<string, unknown>,
   ): Promise<{ success: boolean; message: string }> {
-    const baseUrl = config['baseUrl'] as string | undefined;
+    const cfg = config as unknown as RestConnectorConfig;
+    const baseUrl = cfg.baseUrl;
     if (!baseUrl) {
       return { success: false, message: 'Missing baseUrl in config' };
     }
 
     try {
       const response = await lastValueFrom(
-        this.httpService.get(baseUrl, { timeout: 10000 }),
+        this.httpService.get(baseUrl, {
+          timeout: 10000,
+          ...(this.tlsOptions?.axiosConfig(baseUrl, cfg.tls, 'REST target') ??
+            {}),
+        }),
       );
       return {
         success: true,

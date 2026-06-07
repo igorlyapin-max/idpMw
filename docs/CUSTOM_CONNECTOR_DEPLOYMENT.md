@@ -378,15 +378,29 @@ curl -X POST http://localhost:3010/admin/target-systems \
 
 ### 4.1 Env-переменные, относящиеся к коннекторам
 
-| Переменная              | Значение по умолчанию | Описание                           |
-| ----------------------- | --------------------- | ---------------------------------- |
-| `DB_CONNECTOR_ENABLED`  | `false`               | Включить SQL-коннектор (knex)      |
-| `DB_CONNECTOR_URL`      | —                     | URL для SQL-коннектора             |
-| `DB_CONNECTOR_DIALECT`  | `pg`                  | Диалект: `pg`, `mysql2`, `sqlite3` |
-| `ADMIN_UI_ENABLED`      | `true`                | Раздавать React Admin UI           |
-| `ADMIN_UI_SERVE_STATIC` | `true`                | Раздавать статику из `ui/dist`     |
-| `KAFKA_ENABLED`         | `false`               | Асинхронная обработка через Kafka  |
-| `REDIS_ENABLED`         | `false`               | Кэш и distributed locks            |
+| Переменная               | Значение по умолчанию | Описание                                               |
+| ------------------------ | --------------------- | ------------------------------------------------------ |
+| `DB_CONNECTOR_ENABLED`   | `false`               | Включить SQL-коннектор (knex)                          |
+| `DB_CONNECTOR_URL`       | —                     | URL для SQL-коннектора; для Oracle `host:1521/service` |
+| `DB_CONNECTOR_DIALECT`   | `pg`                  | Диалект: `pg`, `mysql2`, `sqlite3`, `oracledb`         |
+| `DB_CONNECTOR_USERNAME`  | —                     | Пользователь Oracle-коннектора                         |
+| `DB_CONNECTOR_PASSWORD`  | —                     | Пароль Oracle-коннектора                               |
+| `ADMIN_UI_ENABLED`       | `true`                | Раздавать React Admin UI                               |
+| `ADMIN_UI_SERVE_STATIC`  | `true`                | Раздавать статику из `ui/dist`                         |
+| `KAFKA_ENABLED`          | `false`               | Включить Kafka producer/consumer                       |
+| `KAFKA_BROKERS`          | `localhost:9092`      | Kafka bootstrap brokers                                |
+| `KAFKA_TOPIC_EVENTS_IN`  | `idm.events.in`       | Topic для async write-событий                          |
+| `KAFKA_TOPIC_EVENTS_OUT` | `idm.events.out`      | Topic статусов обработки                               |
+| `KAFKA_TOPIC_DLQ_RETRY`  | `idm.dlq.retry`       | Topic ручного DLQ retry                                |
+| `IDMMW_PROCESSING_MODE`  | `sync`                | `sync` или `async`; async требует Kafka                |
+| `REDIS_ENABLED`          | `false`               | Redis idempotency store                                |
+| `REDIS_HOST`             | `localhost`           | Redis host                                             |
+| `REDIS_PORT`             | `6379`                | Redis port                                             |
+
+Для `DB_CONNECTOR_DIALECT=oracledb` используется `oracledb` Thin mode:
+достаточно npm-драйвера, `DB_CONNECTOR_URL` в формате `host:1521/service`,
+`DB_CONNECTOR_USERNAME` и `DB_CONNECTOR_PASSWORD`. Oracle Instant Client нужен
+только для Thick mode, который сейчас не включается автоматически.
 
 ### 4.2 Схема JSON поля `config` в `TargetSystem`
 
@@ -397,11 +411,21 @@ curl -X POST http://localhost:3010/admin/target-systems \
   "baseUrl": "https://api.example.com",
   "timeout": 15000,
   "apiKey": "...",
-  "retryAttempts": 3
+  "retryAttempts": 3,
+  "tls": {
+    "enabled": true,
+    "caPath": "/etc/idmmw/tls/target-ca.crt",
+    "certPath": "/etc/idmmw/tls/idmmw-client.crt",
+    "keyPath": "/etc/idmmw/tls/idmmw-client.key",
+    "serverName": "api.example.com",
+    "rejectUnauthorized": true
+  }
 }
 ```
 
 Коннектор обязан валидировать наличие обязательных полей самостоятельно в методе `execute`.
+Если `tls.enabled=true`, URL целевой системы должен использовать `https://`.
+Подробный security runbook: `docs/SECURITY_TLS_ENCRYPTION.md`.
 
 ### 4.3 Управление учётными данными
 
@@ -438,8 +462,8 @@ DATABASE_URL=file:./data/idmmw.db
 В lightweight режиме:
 
 - База данных — SQLite (файл `data/idmmw.db`).
-- Kafka и Redis автоматически отключены.
-- Single worker (no clustering).
+- Kafka и Redis по умолчанию отключены.
+- Single worker (no clustering); для HA включайте общую БД, Redis и/или Kafka.
 - JSON поля хранятся как сериализованные строки.
 
 ### 5.2 Production (PostgreSQL + Redis + Kafka)
@@ -457,6 +481,13 @@ npm run build
 # Запуск
 npm run start:prod
 ```
+
+HA режимы:
+
+- `IDMMW_PROCESSING_MODE=sync`: webhook сразу вызывает коннектор; Kafka может публиковать статусы в `KAFKA_TOPIC_EVENTS_OUT`.
+- `IDMMW_PROCESSING_MODE=async`: write webhook кладётся в `KAFKA_TOPIC_EVENTS_IN`, worker group обрабатывает событие и публикует результат в `KAFKA_TOPIC_EVENTS_OUT`.
+- `REDIS_ENABLED=true`: duplicate `eventId` отсекается Redis `SET NX EX`; при `false` используется таблица `IdempotencyKey`.
+- Для live-проверки текущего стенда используйте `npm run test:ha-live` с Redis `127.0.0.1:16379` и Kafka `127.0.0.1:9092`.
 
 ### 5.3 Zero-downtime обновление коннектора
 

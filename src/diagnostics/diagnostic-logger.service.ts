@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import type { DebugLoggingLevel } from '../config/logging.config';
 
 const SENSITIVE_KEY_RE =
-  /(password|passwd|token|secret|authorization|cookie|apiKey|key)$/i;
+  /(password|passwd|token|secret|authorization|cookie|apiKey|key|cert|ca|pem|walletPassword)$/i;
 
 @Injectable()
 export class DiagnosticLoggerService {

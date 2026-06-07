@@ -1,8 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { IdempotencyStore } from './idempotency.store.interface';
 import { RedisIdempotencyStore } from './stores/redis-idempotency.store';
 import { PgIdempotencyStore } from './stores/pg-idempotency.store';
+import { EncryptionService } from '../../security/encryption.service';
 
 @Injectable()
 export class IdempotencyService {
@@ -13,13 +14,9 @@ export class IdempotencyService {
     private readonly config: ConfigService,
     private readonly redisStore: RedisIdempotencyStore,
     private readonly pgStore: PgIdempotencyStore,
+    @Optional() private readonly encryption?: EncryptionService,
   ) {
     const redisEnabled = this.config.get<boolean>('REDIS_ENABLED') ?? false;
-    if (redisEnabled) {
-      throw new Error(
-        'REDIS_ENABLED=true is not supported in this build: Redis idempotency store is not implemented. Set REDIS_ENABLED=false to use PostgreSQL idempotency.',
-      );
-    }
     this.store = redisEnabled ? this.redisStore : this.pgStore;
     this.logger.log(
       `Using idempotency store: ${redisEnabled ? 'Redis' : 'PostgreSQL'}`,
@@ -27,14 +24,29 @@ export class IdempotencyService {
   }
 
   async checkAndLock(key: string, ttlSeconds: number = 3600): Promise<boolean> {
-    const locked = await this.store.setIfNotExists(key, ttlSeconds);
+    const keys = this.encryption?.idempotencyKeys(key) ?? [key];
+    if (keys.length > 1) {
+      for (const candidate of keys) {
+        if (await this.store.exists(candidate)) {
+          this.logger.warn('Duplicate event detected for encrypted key');
+          return false;
+        }
+      }
+    }
+
+    const locked = await this.store.setIfNotExists(keys[0], ttlSeconds);
     if (!locked) {
-      this.logger.warn(`Duplicate event detected: ${key}`);
+      this.logger.warn(
+        this.encryption?.isIdempotencyHmacEnabled()
+          ? 'Duplicate event detected for encrypted key'
+          : `Duplicate event detected: ${key}`,
+      );
     }
     return locked;
   }
 
   async release(key: string): Promise<void> {
-    await this.store.delete(key);
+    const keys = this.encryption?.idempotencyKeys(key) ?? [key];
+    await Promise.all(keys.map((candidate) => this.store.delete(candidate)));
   }
 }

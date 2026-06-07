@@ -71,12 +71,14 @@ describe('ProcessingService', () => {
       (fn as () => Promise<unknown>)(),
     );
 
-    await service.process({
-      eventId: 'e1',
-      operation: 'create',
-      targetSystem: 'zabbix',
-      payload: { data: 1 },
-    });
+    await expect(
+      service.process({
+        eventId: 'e1',
+        operation: 'create',
+        targetSystem: 'zabbix',
+        payload: { data: 1 },
+      }),
+    ).rejects.toThrow('fail');
 
     expect(metrics.recordConnectorError).toHaveBeenCalledWith(
       'zabbix',
@@ -100,12 +102,14 @@ describe('ProcessingService', () => {
       (fn as () => Promise<unknown>)(),
     );
 
-    await service.process({
-      eventId: 'e1',
-      operation: 'create',
-      targetSystem: 'zabbix',
-      payload: {},
-    });
+    await expect(
+      service.process({
+        eventId: 'e1',
+        operation: 'create',
+        targetSystem: 'zabbix',
+        payload: {},
+      }),
+    ).rejects.toThrow('boom');
 
     expect(metrics.recordEvent).toHaveBeenCalledWith('failed');
     expect(dlq.add).toHaveBeenCalledWith(

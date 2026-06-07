@@ -110,6 +110,11 @@ const zabbixMethodMatrix: Array<{
 describe('ZabbixConnectorService', () => {
   let service: ZabbixConnectorService;
   let httpService: { post: jest.Mock };
+  type ZabbixPostCall = [
+    string,
+    { method?: string },
+    { headers?: Record<string, string> }?,
+  ];
 
   beforeEach(async () => {
     httpService = { post: jest.fn() };
@@ -189,9 +194,8 @@ describe('ZabbixConnectorService', () => {
 
         expect(result.success).toBe(true);
         const callIndex = method === 'apiinfo.version' ? 0 : 1;
-        const body = httpService.post.mock.calls[callIndex][1] as {
-          method: string;
-        };
+        const calls = httpService.post.mock.calls as ZabbixPostCall[];
+        const body = calls[callIndex][1];
         expect(body.method).toBe(method);
       },
     );
@@ -209,10 +213,8 @@ describe('ZabbixConnectorService', () => {
 
       expect(result.success).toBe(true);
       expect(httpService.post).toHaveBeenCalledTimes(1);
-      const options = httpService.post.mock.calls[0][2] as {
-        headers: Record<string, string>;
-      };
-      expect(options.headers.Authorization).toBe('Bearer token-1');
+      const calls = httpService.post.mock.calls as ZabbixPostCall[];
+      expect(calls[0][2]?.headers?.Authorization).toBe('Bearer token-1');
     });
 
     it('should return error when baseUrl is missing', async () => {
@@ -259,6 +261,25 @@ describe('ZabbixConnectorService', () => {
       expect(body.params).toMatchObject({
         search: { username: 'Admin' },
         limit: 10,
+      });
+    });
+
+    it('should resolve users with username in output', async () => {
+      mockLoginThenResult([{ userid: '1', username: 'jdoe' }]);
+      await service.execute({
+        operation: 'user.resolve',
+        targetSystem: 'zabbix',
+        payload: {
+          config: { baseUrl: 'http://z', username: 'u', password: 'p' },
+          params: { username: 'jdoe' },
+        },
+      });
+      const lastCall = httpService.post.mock.calls[1] as unknown[];
+      const body = lastCall[1] as { method: string; params: unknown };
+      expect(body.method).toBe('user.get');
+      expect(body.params).toMatchObject({
+        filter: { username: 'jdoe' },
+        output: ['userid', 'username', 'name', 'surname'],
       });
     });
 

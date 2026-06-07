@@ -16,6 +16,7 @@ import { AdminModule } from './admin/admin.module';
 import { MetricsModule } from './metrics/metrics.module';
 import { HttpMetricsMiddleware } from './metrics/http-metrics.middleware';
 import { applyPamCompatibility } from './secrets/legacy-compat';
+import { SecurityModule } from './security/security.module';
 
 applyPamCompatibility();
 
@@ -38,6 +39,7 @@ const isLightweight = process.env['LIGHTWEIGHT_MODE'] === 'true';
     }),
     DiagnosticsModule,
     SecretsModule,
+    SecurityModule,
     PrismaModule,
     HealthModule,
     MockIdmModule,

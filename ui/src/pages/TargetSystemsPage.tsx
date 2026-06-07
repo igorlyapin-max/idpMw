@@ -32,8 +32,10 @@ const TYPE_FIELDS: Record<string, ConfigField[]> = {
     { name: 'baseUrl', label: 'Base URL (optional)' },
   ],
   db: [
-    { name: 'client', label: 'Dialect (pg | mysql2 | sqlite3)' },
-    { name: 'connection', label: 'Connection String' },
+    { name: 'client', label: 'Dialect (pg | mysql2 | sqlite3 | oracledb)' },
+    { name: 'connection', label: 'Connection String / Oracle connectString' },
+    { name: 'username', label: 'Username (Oracle)' },
+    { name: 'password', label: 'Password (Oracle)' },
   ],
   fake: [
     { name: 'baseUrl', label: 'Base URL' },
