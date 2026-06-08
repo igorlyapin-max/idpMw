@@ -407,6 +407,9 @@ tail -f /tmp/idmmw.log
 Подробное руководство по созданию и развёртыванию пользовательского коннектора:
 [docs/CUSTOM_CONNECTOR_DEPLOYMENT.md](docs/CUSTOM_CONNECTOR_DEPLOYMENT.md)
 
+Инструкция для администратора IDM по настройке multi-target webhook contract:
+[docs/IDM_ADMIN_DEPLOYMENT.md](docs/IDM_ADMIN_DEPLOYMENT.md)
+
 ## Multi-instance target systems
 
 Приложение поддерживает динамическую загрузку коннекторов из БД. Каждая запись `TargetSystem` описывает отдельный инстанс целевой системы:
