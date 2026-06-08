@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../database/prisma.service';
 import { JsonHelper } from '../../database/json.helper';
+import { MetricsService } from '../../metrics/metrics.service';
+import { RetryPolicyService } from '../retry/retry-policy.service';
 
 export interface DlqItemData {
   eventId: string;
@@ -20,6 +22,8 @@ export class DlqService {
     private readonly prisma: PrismaService,
     private readonly jsonHelper: JsonHelper,
     private readonly config: ConfigService,
+    private readonly metrics: MetricsService,
+    private readonly retryPolicy: RetryPolicyService,
   ) {}
 
   async add(item: DlqItemData): Promise<void> {
@@ -36,13 +40,23 @@ export class DlqService {
       },
     });
     this.logger.log(`Event ${item.eventId} moved to DLQ`);
+    await this.updateMetrics();
   }
 
   async retry(id: string): Promise<boolean> {
-    const leaseSeconds =
-      this.config.get<number>('DLQ_RETRY_LEASE_SECONDS') ?? 300;
+    const item = await this.prisma.dlqItem.findUnique({
+      where: { id },
+      select: { targetSystem: true },
+    });
+    const targetPolicy = item
+      ? await this.retryPolicy.forTarget(item.targetSystem)
+      : undefined;
+    const effectiveLeaseSeconds =
+      targetPolicy?.dlqLeaseSeconds ??
+      this.config.get<number>('DLQ_RETRY_LEASE_SECONDS') ??
+      300;
     const now = new Date();
-    const expiredBefore = new Date(Date.now() - leaseSeconds * 1000);
+    const expiredBefore = new Date(Date.now() - effectiveLeaseSeconds * 1000);
     const lockedBy = `${process.pid}`;
 
     const result = await this.prisma.dlqItem.updateMany({
@@ -62,6 +76,9 @@ export class DlqService {
         lockedBy,
       },
     });
+    if (result.count === 1) {
+      await this.updateMetrics();
+    }
     return result.count === 1;
   }
 
@@ -70,6 +87,7 @@ export class DlqService {
       where: { id },
       data: { status: 'skipped', lockedAt: null, lockedBy: null },
     });
+    await this.updateMetrics();
   }
 
   async resolve(id: string): Promise<void> {
@@ -77,5 +95,18 @@ export class DlqService {
       where: { id },
       data: { status: 'resolved', lockedAt: null, lockedBy: null },
     });
+    await this.updateMetrics();
+  }
+
+  async updateMetrics(): Promise<void> {
+    const counts = await this.prisma.dlqItem.groupBy({
+      by: ['status'],
+      _count: { status: true },
+    });
+    for (const status of ['pending', 'retrying', 'skipped', 'resolved']) {
+      const count =
+        counts.find((row) => row.status === status)?._count.status ?? 0;
+      this.metrics.setDlqSize(status, count);
+    }
   }
 }

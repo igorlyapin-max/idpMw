@@ -1,94 +1,109 @@
-# Шаблон добавления нового REST-коннектора
+# Connector template
 
-> **Руководство по развёртыванию:** Подробная документация с процедурами проверки, troubleshooting и security checklist — [CUSTOM_CONNECTOR_DEPLOYMENT.md](CUSTOM_CONNECTOR_DEPLOYMENT.md)
+> Подробные процедуры развёртывания и проверки: [CUSTOM_CONNECTOR_DEPLOYMENT.md](CUSTOM_CONNECTOR_DEPLOYMENT.md)
+> Настройка IDM multi-target contract: [IDM_ADMIN_DEPLOYMENT.md](IDM_ADMIN_DEPLOYMENT.md)
 
-> Время интеграции: ~10 минут
-> Живой пример: `src/connectors/implementations/fake-connector/`
+`src/connectors/implementations/fake-connector/` является reference template для
+новых коннекторов. Он показывает оба режима работы:
 
-## Архитектура
+- local mock mode для contract/e2e проверок без внешней системы;
+- remote mode через HTTP endpoint с `baseUrl`, timeout и `tls`.
 
-### Полный flow от webhook до коннектора
+Новый connector должен сохранять тот же public contract: Avanpost IDM отправляет
+`operation`, `targetSystem` и `payload`, а idmMw маршрутизирует событие через
+`ConnectorRegistry`.
 
-```
-Avanpost IDM
-     │
-     ▼
-POST /webhooks/avanpost  (WebhookController)
-     │
-     ▼
-WebhookService.processWebhook()
-     │
-     ├── idempotency check (deduplication by eventId)
-     │
-     ▼
-DispatcherService.dispatch()
-     │
-     ├── ProcessingService.process()  (retry logic)
-     │       │
-     │       ▼
-     │   ConnectorRegistry.get(targetSystem)
-     │       │
-     │       ├── static connector (legacy mode)
-     │       └── proxy ──► static connector + DB config
-     │               │
-     │               ▼
-     │        Concrete Connector (zabbix, cmdbuild, fake, …)
-     │               │
-     │               ▼
-     │        HTTP request with config from payload
-     │
-     ▼
-Kafka event (optional, if KAFKA_ENABLED=true)
+Важно: этот Node.js connector interface не является native Avanpost
+`IProvisioningConnector` SDK. Native Avanpost connector разрабатывается как
+.NET assembly и подключается через Avanpost connector services. В idmMw
+connector реализует middleware adapter contract для webhook/BP/event flow.
+
+## Payload contract
+
+`ConnectorPayload.payload` содержит три логические зоны:
+
+```ts
+{
+  data: { ... },   // body/change data: user fields, group fields, attributes
+  params: { ... }, // route/query/read params: id, filter, limit, groupId
+  config: { ... }  // injected TargetSystem.config, never supplied by IDM
+}
 ```
 
-### Как проносятся настройки подключения
+Правила:
 
-1. **Admin** создаёт `TargetSystem` через UI/API, заполняя поле `config` JSON-объектом с параметрами подключения (baseUrl, таймауты, ключи доступа).
+- `payload.data` используется для write body и изменяемых атрибутов.
+- `payload.params` используется для read operations и идентификаторов из route
+  или query.
+- `payload.config` добавляет `ConnectorRegistry` из DB-backed `TargetSystem`.
+- Коннектор не должен читать production URL, passwords или tokens из кода.
 
-2. **ConnectorRegistry** при старте (или после reload) создаёт `proxy` для каждой записи из БД. Proxy оборачивает статический коннектор и при вызове `execute()` мержит `config` из БД в `payload.config`.
+## Minimal data structures
 
-3. **ProcessingService** вызывает `connector.execute()`:
+Используйте typed interfaces рядом с connector service. Они фиксируют локальный
+контракт и упрощают перенос fake connector в реальный connector.
 
-   ```ts
-   connector.execute({
-     operation: 'host.create',
-     targetSystem: 'zabbix-prod',
-     payload: {
-       data: { ... },
-       config: { baseUrl: '...', timeout: 15000 }  // ← из БД
-     }
-   })
-   ```
+```ts
+import type { TlsConnectionConfig } from '../../../security/tls-options.factory';
+import type { TargetRetryPolicy } from '../../../core/retry/retry-policy.service';
 
-4. **Конкретный коннектор** читает `payload.config` и строит HTTP запрос. Поля config используются для URL, заголовков, таймаутов.
+export interface MySystemConfig {
+  baseUrl: string;
+  apiKey?: string;
+  timeout?: number;
+  tls?: TlsConnectionConfig;
+  retryPolicy?: TargetRetryPolicy;
+}
 
-**Важно:** параметры подключения никогда не хранятся в коде коннектора. Они приходят через `payload.config`, который заполняется в Admin UI и хранится в БД.
+interface MySystemUser {
+  id?: unknown;
+  username?: string;
+  email?: string;
+  firstName?: string;
+  lastName?: string;
+  enabled?: boolean;
+  groups?: string[];
+}
 
-### Как мапятся operations
+interface MySystemGroup {
+  id?: unknown;
+  name?: string;
+  members?: string[];
+}
 
-`operation` из webhook передаётся **as-is** через всю цепочку:
+interface MySystemSearchResult<TItem> {
+  items: TItem[];
+  total: number;
+}
 
+interface MySystemSchemaAttribute {
+  name: string;
+  type: string;
+  required: boolean;
+  multiValued: boolean;
+}
+
+interface MySystemSchema {
+  objectClasses: Array<{
+    name: string;
+    attributes: MySystemSchemaAttribute[];
+  }>;
+}
+
+interface MySystemSyncResult {
+  mode: 'full' | 'incremental';
+  created: number;
+  updated: number;
+  deleted: number;
+  unchanged?: number;
+}
 ```
-Webhook:  { operation: 'user.create', ... }
-              │
-              ▼
-Dispatcher ──► ProcessingService.process({ operation: 'user.create' })
-              │
-              ▼
-Connector ──► execute({ operation: 'user.create', ... })
-```
 
-Каждый коннектор сам решает, как интерпретировать `operation`:
+`retryPolicy` находится в `TargetSystem.config`, но применяется idmMw
+`RetryPolicyService`, а не connector code. Коннектору нужен timeout и корректная
+обработка ошибок; глобальный retry поверх idmMw не добавляйте.
 
-- **Zabbix** — передаёт как `method` в Zabbix API
-- **CMDBuild** — использует `switch(operation)` для выбора URL/method
-- **Fake/REST** — может игнорировать или логировать operation
-
----
-
-## Интерфейс Connector
-
-Каждый коннектор — это класс, реализующий интерфейс `Connector`:
+## Connector interface
 
 ```ts
 export interface Connector {
@@ -103,37 +118,40 @@ export interface Connector {
 }
 ```
 
-| Метод             | Назначение                                                            |
-| ----------------- | --------------------------------------------------------------------- |
-| `name`            | Уникальный идентификатор типа (`'fake'`, `'zabbix'` …)                |
-| `execute`         | Основная операция: отправка данных в целевую систему                  |
-| `testConnection`  | Проверка доступности (используется из Admin UI)                       |
-| `getCapabilities` | IDM-facing описание поддерживаемых operations и частичных ограничений |
-| `getSchema`       | Опциональный native handler для `schema.get`                          |
-| `sync`            | Опциональный native handler для `sync.full` / `sync.incremental`      |
+Методы:
 
-Если коннектор обслуживает несколько DB-backed `TargetSystem`, `ConnectorRegistry` прокидывает `getCapabilities()` через proxy. Ответы `GET /idm/target-systems` и `GET /idm/target-systems/:name` используют этот контракт и не возвращают `config` или секреты.
+| Метод             | Назначение                                                                                                   |
+| ----------------- | ------------------------------------------------------------------------------------------------------------ |
+| `name`            | Static connector type, например `fake`, `zabbix`, `my-system`.                                               |
+| `execute`         | Основная операция; получает `operation`, `targetSystem`, `payload.data`, `payload.params`, `payload.config`. |
+| `testConnection`  | Проверка связи из Admin UI/API и `/idm/:targetSystem/test`.                                                  |
+| `getCapabilities` | IDM-facing список operations/read/write capabilities.                                                        |
+| `getSchema`       | Native handler для `schema.get`, если нужен отдельный flow.                                                  |
+| `sync`            | Native handler для `sync.full` / `sync.incremental`.                                                         |
 
----
-
-## Шаг 1: Создать сервис-коннектор
-
-Скопируй `fake-connector.service.ts` и адаптируй:
+## Service skeleton
 
 ```ts
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
 import {
   Connector,
+  ConnectorCapabilities,
   ConnectorPayload,
   ConnectorResult,
 } from '../../connector.interface';
+import { createConnectorCapabilities } from '../../connector.capabilities';
+import {
+  TlsConnectionConfig,
+  TlsOptionsFactory,
+} from '../../../security/tls-options.factory';
 
 export interface MySystemConfig {
   baseUrl: string;
   apiKey?: string;
   timeout?: number;
+  tls?: TlsConnectionConfig;
 }
 
 @Injectable()
@@ -141,7 +159,14 @@ export class MySystemConnectorService implements Connector {
   readonly name = 'my-system';
   private readonly logger = new Logger(MySystemConnectorService.name);
 
-  constructor(private readonly httpService: HttpService) {}
+  constructor(
+    private readonly httpService: HttpService,
+    @Optional() private readonly tlsOptions?: TlsOptionsFactory,
+  ) {}
+
+  getCapabilities(): ConnectorCapabilities {
+    return createConnectorCapabilities();
+  }
 
   async execute(payload: ConnectorPayload): Promise<ConnectorResult> {
     const config = payload.payload['config'] as MySystemConfig | undefined;
@@ -149,22 +174,37 @@ export class MySystemConnectorService implements Connector {
       return { success: false, error: 'Missing config (baseUrl)' };
     }
 
+    const data = (payload.payload['data'] ?? {}) as Record<string, unknown>;
+    const params = (payload.payload['params'] ?? {}) as Record<string, unknown>;
+
     try {
       const response = await lastValueFrom(
         this.httpService.post(
-          `${config.baseUrl}/api/users`,
-          payload.payload['data'] ?? {},
+          `${config.baseUrl}/api/idm`,
           {
-            headers: config.apiKey ? { 'X-Api-Key': config.apiKey } : undefined,
+            operation: payload.operation,
+            targetSystem: payload.targetSystem,
+            data,
+            params,
+          },
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              ...(config.apiKey ? { 'X-Api-Key': config.apiKey } : {}),
+            },
             timeout: config.timeout ?? 10000,
+            ...(this.tlsOptions?.axiosConfig(
+              config.baseUrl,
+              config.tls,
+              'MySystem remote',
+            ) ?? {}),
           },
         ),
       );
-      this.logger.log(`Success: ${response.status}`);
       return { success: true, data: response.data };
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Failed: ${msg}`);
+      this.logger.error(`MySystem call failed: ${msg}`);
       return { success: false, error: msg };
     }
   }
@@ -176,138 +216,152 @@ export class MySystemConnectorService implements Connector {
     if (!cfg.baseUrl) {
       return { success: false, message: 'Missing baseUrl' };
     }
+
     try {
-      const res = await lastValueFrom(
+      const response = await lastValueFrom(
         this.httpService.get(`${cfg.baseUrl}/health`, {
           timeout: cfg.timeout ?? 5000,
+          ...(this.tlsOptions?.axiosConfig(
+            cfg.baseUrl,
+            cfg.tls,
+            'MySystem remote',
+          ) ?? {}),
         }),
       );
       return {
         success: true,
-        message: `Reachable (status ${res.status})`,
+        message: `Reachable (status ${response.status})`,
       };
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       return { success: false, message: `Connection failed: ${msg}` };
     }
   }
+
+  async getSchema(payload: ConnectorPayload): Promise<ConnectorResult> {
+    return this.execute({ ...payload, operation: 'schema.get' });
+  }
+
+  async sync(
+    payload: ConnectorPayload,
+    mode: string,
+  ): Promise<ConnectorResult> {
+    return this.execute({
+      ...payload,
+      operation: mode === 'incremental' ? 'sync.incremental' : 'sync.full',
+    });
+  }
 }
 ```
 
-**Правила:**
+## Register the connector
 
-- Всегда валидируй `config` перед использованием
-- Всегда оборачивай HTTP вызовы в `try/catch`
-- Возвращай понятные сообщения об ошибках
-- Не храни чувствительные данные в коде — они приходят через `config`
-
----
-
-## Шаг 2: Зарегистрировать в модуле
-
-`src/connectors/connectors.module.ts`:
+Add the service to `src/connectors/connectors.module.ts`:
 
 ```ts
 import { MySystemConnectorService } from './implementations/my-system/my-system.service';
 
 @Module({
-  imports: [HttpModule],
+  imports: [HttpModule, PrismaModule],
   providers: [
     ConnectorRegistry,
-    // ... другие коннекторы
+    RestConnectorService,
+    DbConnectorService,
+    ZabbixConnectorService,
+    CmdbuildConnectorService,
+    FakeConnectorService,
     MySystemConnectorService,
   ],
   exports: [ConnectorRegistry],
 })
+export class ConnectorsModule {}
 ```
 
----
-
-## Шаг 3: Добавить в ConnectorRegistry
-
-`src/connectors/connector.registry.ts`:
+Register it in `src/connectors/connector.registry.ts`:
 
 ```ts
-import { MySystemConnectorService } from './implementations/my-system/my-system.service';
-
-export class ConnectorRegistry implements OnModuleInit {
-  constructor(
-    // ... другие коннекторы
-    private readonly mySystemConnector: MySystemConnectorService,
-  ) {
-    // ... другие registerStatic
-    this.registerStatic(this.mySystemConnector);
-  }
+constructor(
+  private readonly prisma: PrismaService,
+  private readonly jsonHelper: JsonHelper,
+  private readonly restConnector: RestConnectorService,
+  private readonly dbConnector: DbConnectorService,
+  private readonly zabbixConnector: ZabbixConnectorService,
+  private readonly cmdbuildConnector: CmdbuildConnectorService,
+  private readonly fakeConnector: FakeConnectorService,
+  private readonly mySystemConnector: MySystemConnectorService,
+) {
+  this.registerStatic(this.restConnector);
+  this.registerStatic(this.dbConnector);
+  this.registerStatic(this.zabbixConnector);
+  this.registerStatic(this.cmdbuildConnector);
+  this.registerStatic(this.fakeConnector);
+  this.registerStatic(this.mySystemConnector);
 }
 ```
 
-После этого `ConnectorRegistry` автоматически:
+`ConnectorRegistry` создаст proxy для каждой DB-backed записи
+`TargetSystem(type='my-system')` и добавит `TargetSystem.config` в
+`payload.config`.
 
-- Создаст proxy для каждой `TargetSystem` записи с `type='my-system'`
-- Будет мержить `config` из БД в `payload` при вызове `execute`
-
----
-
-## Шаг 4: Добавить форму в Admin UI
-
-`ui/src/pages/TargetSystemsPage.tsx`:
-
-```ts
-const TYPE_OPTIONS = ['zabbix', 'cmdbuild', 'rest', 'db', 'fake', 'my-system'];
-
-const TYPE_FIELDS: Record<string, ConfigField[]> = {
-  // ... другие типы
-  'my-system': [
-    { name: 'baseUrl', label: 'Base URL' },
-    { name: 'apiKey', label: 'API Key (optional)' },
-    { name: 'timeout', label: 'Timeout ms (optional)' },
-  ],
-};
-```
-
----
-
-## Шаг 5: Написать unit-тест
-
-Скопируй `fake-connector.service.spec.ts` и адаптируй под свои endpoints.
-
----
-
-## Шаг 6: Создать TargetSystem через Admin API
+## TargetSystem config
 
 ```bash
 curl -X POST http://localhost:3010/admin/target-systems \
   -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: <token-if-admin-auth-enabled>" \
   -d '{
     "name": "my-system-prod",
     "type": "my-system",
     "label": "My System Production",
     "config": {
       "baseUrl": "https://api.mysystem.local",
-      "apiKey": "replace-me",
-      "timeout": 15000
+      "apiKey": "REPLACE_ME",
+      "timeout": 15000,
+      "retryPolicy": {
+        "maxRetries": 5,
+        "baseDelayMs": 1000,
+        "maxDelayMs": 30000,
+        "dlqLeaseSeconds": 600,
+        "jitter": true
+      },
+      "tls": {
+        "enabled": true,
+        "caPath": "/etc/idmmw/tls/target-ca.crt",
+        "certPath": "/etc/idmmw/tls/idmmw-client.crt",
+        "keyPath": "/etc/idmmw/tls/idmmw-client.key",
+        "serverName": "api.mysystem.local",
+        "rejectUnauthorized": true
+      }
     },
     "enabled": true
   }'
 ```
 
-Или через Admin UI: `http://localhost:3010/` → Target Systems → Create.
+Если `ADMIN_AUTH_ENABLED=true`, `/admin/*` API требует admin session; `POST`,
+`PATCH` и `DELETE` дополнительно требуют `X-CSRF-Token`.
 
----
-
-## Проверка
+## Verification
 
 ```bash
-# 1. Валидация
-npm run validate
-
-# 2. Unit тесты
+# Static checks
+npm run build
 npm test -- my-system
 
-# 3. Проверка связи
-POST /admin/target-systems/:id/test
+# IDM-facing catalog, no secrets in response
+curl -s http://localhost:3010/idm/target-systems | jq .
+curl -s http://localhost:3010/idm/target-systems/my-system-prod | jq .
 
-# 4. E2E отправка события
-POST /webhooks/avanpost \
-  -d '{"eventId":"test-1","operation":"user.create","targetSystem":"my-system-prod","payload":{"data":{"name":"John"}}}'
+# Connection checks
+curl -s http://localhost:3010/idm/my-system-prod/test | jq .
+curl -s -X POST http://localhost:3010/admin/target-systems/<id>/test | jq .
+
+# Write webhook
+curl -X POST http://localhost:3010/webhooks/avanpost \
+  -H "Content-Type: application/json" \
+  -d '{"eventId":"test-1:my-system-prod","operation":"user.create","targetSystem":"my-system-prod","payload":{"data":{"username":"jdoe"}}}'
+
+# Mock IDM route names use operation kebab-case
+curl -X POST http://localhost:3010/mock-idm/scenario/user-create
+curl -X POST http://localhost:3010/mock-idm/scenario/user-update
+curl -X POST http://localhost:3010/mock-idm/scenario/user-delete
 ```

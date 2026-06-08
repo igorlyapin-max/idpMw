@@ -1,4 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { JsonHelper } from '../database/json.helper';
 import { ConnectorRegistry } from '../connectors/connector.registry';
@@ -57,50 +62,62 @@ export class TargetSystemService {
   }
 
   async create(dto: CreateTargetSystemDto) {
-    const item = await this.prisma.targetSystem.create({
-      data: {
-        name: dto.name,
-        type: dto.type,
-        label: dto.label,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        config: this.jsonHelper.toJson(dto.config) as any,
-        enabled: dto.enabled ?? true,
-      },
-    });
-    return {
-      ...item,
-      config: this.jsonHelper.fromJson<Record<string, unknown>>(item.config),
-    };
+    try {
+      const item = await this.prisma.targetSystem.create({
+        data: {
+          name: dto.name,
+          type: dto.type,
+          label: dto.label,
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+          config: this.jsonHelper.toJson(dto.config) as any,
+          enabled: dto.enabled ?? true,
+        },
+      });
+      return {
+        ...item,
+        config: this.jsonHelper.fromJson<Record<string, unknown>>(item.config),
+      };
+    } catch (error: unknown) {
+      this.handlePrismaMutationError(error);
+    }
   }
 
   async update(id: string, dto: UpdateTargetSystemDto) {
-    const item = await this.prisma.targetSystem.update({
-      where: { id },
-      data: {
-        ...(dto.name !== undefined ? { name: dto.name } : {}),
-        ...(dto.type !== undefined ? { type: dto.type } : {}),
-        ...(dto.label !== undefined ? { label: dto.label } : {}),
-        ...(dto.config !== undefined
-          ? {
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-              config: this.jsonHelper.toJson(dto.config) as any,
-            }
-          : {}),
-        ...(dto.enabled !== undefined ? { enabled: dto.enabled } : {}),
-      },
-    });
-    return {
-      ...item,
-      config: this.jsonHelper.fromJson<Record<string, unknown>>(item.config),
-    };
+    try {
+      const item = await this.prisma.targetSystem.update({
+        where: { id },
+        data: {
+          ...(dto.name !== undefined ? { name: dto.name } : {}),
+          ...(dto.type !== undefined ? { type: dto.type } : {}),
+          ...(dto.label !== undefined ? { label: dto.label } : {}),
+          ...(dto.config !== undefined
+            ? {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                config: this.jsonHelper.toJson(dto.config) as any,
+              }
+            : {}),
+          ...(dto.enabled !== undefined ? { enabled: dto.enabled } : {}),
+        },
+      });
+      return {
+        ...item,
+        config: this.jsonHelper.fromJson<Record<string, unknown>>(item.config),
+      };
+    } catch (error: unknown) {
+      this.handlePrismaMutationError(error);
+    }
   }
 
   async delete(id: string) {
-    const item = await this.prisma.targetSystem.delete({ where: { id } });
-    return {
-      ...item,
-      config: this.jsonHelper.fromJson<Record<string, unknown>>(item.config),
-    };
+    try {
+      const item = await this.prisma.targetSystem.delete({ where: { id } });
+      return {
+        ...item,
+        config: this.jsonHelper.fromJson<Record<string, unknown>>(item.config),
+      };
+    } catch (error: unknown) {
+      this.handlePrismaMutationError(error);
+    }
   }
 
   async testConnection(
@@ -113,5 +130,26 @@ export class TargetSystemService {
     const config =
       this.jsonHelper.fromJson<Record<string, unknown>>(ts.config) ?? {};
     return this.registry.testConnection(ts.type, config);
+  }
+
+  private handlePrismaMutationError(error: unknown): never {
+    if (this.isPrismaError(error, 'P2002')) {
+      throw new ConflictException('TargetSystem name already exists');
+    }
+
+    if (this.isPrismaError(error, 'P2025')) {
+      throw new NotFoundException('TargetSystem not found');
+    }
+
+    throw error;
+  }
+
+  private isPrismaError(error: unknown, code: string): boolean {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as { code?: unknown }).code === code
+    );
   }
 }

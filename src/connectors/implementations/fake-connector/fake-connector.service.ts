@@ -12,12 +12,69 @@ import {
   TlsConnectionConfig,
   TlsOptionsFactory,
 } from '../../../security/tls-options.factory';
+import type { TargetRetryPolicy } from '../../../core/retry/retry-policy.service';
 
 export interface FakeConfig {
   baseUrl: string;
   apiKey?: string;
   timeout?: number;
   tls?: TlsConnectionConfig;
+  retryPolicy?: TargetRetryPolicy;
+}
+
+interface FakeUserRecord extends Record<string, unknown> {
+  id?: unknown;
+  username?: unknown;
+  email?: unknown;
+  firstName?: unknown;
+  lastName?: unknown;
+  enabled?: boolean;
+  locked?: boolean;
+  status?: string;
+  attributes?: Record<string, unknown>;
+  changed?: boolean;
+  uid?: string;
+}
+
+interface FakeGroupRecord extends Record<string, unknown> {
+  id?: unknown;
+  name?: unknown;
+  members?: unknown[];
+  status?: string;
+}
+
+interface FakeSearchResult<TItem> {
+  items: TItem[];
+  total: number;
+}
+
+interface FakeSystemTestResult {
+  reachable: boolean;
+  version: string;
+}
+
+interface FakeSchemaAttribute {
+  name: string;
+  type: string;
+  required: boolean;
+  multiValued: boolean;
+}
+
+interface FakeSchemaObjectClass {
+  name: string;
+  attributes: FakeSchemaAttribute[];
+}
+
+interface FakeSchemaResult {
+  objectClasses: FakeSchemaObjectClass[];
+}
+
+interface FakeSyncResult {
+  mode: 'full' | 'incremental';
+  created: number;
+  updated: number;
+  deleted: number;
+  unchanged: number;
 }
 
 @Injectable()
@@ -43,6 +100,7 @@ export class FakeConnectorService implements Connector {
       return this.executeLocalMock(payload);
     }
 
+    // Remote mode mirrors the IDM operation to a fake-compatible HTTP target.
     const targetUrl = `${config.baseUrl}/api/echo`;
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -89,12 +147,20 @@ export class FakeConnectorService implements Connector {
 
     this.logger.log(`Fake local mock executing: ${op}`);
 
+    // Local mode is a deterministic connector contract reference for tests
+    // and for new connector implementations copied from this service.
     switch (op) {
-      case 'user.create':
+      case 'user.create': {
+        const createdUser: FakeUserRecord = {
+          id: `user-${Date.now()}`,
+          ...data,
+          status: 'created',
+        };
         return {
           success: true,
-          data: { id: `user-${Date.now()}`, ...data, status: 'created' },
+          data: createdUser,
         };
+      }
       case 'user.update':
         return {
           success: true,
@@ -117,27 +183,29 @@ export class FakeConnectorService implements Connector {
             enabled: true,
           },
         };
-      case 'user.search':
+      case 'user.search': {
+        const users: FakeSearchResult<FakeUserRecord> = {
+          items: [
+            {
+              id: 'user-1',
+              username: 'jdoe',
+              email: 'jdoe@example.com',
+              enabled: true,
+            },
+            {
+              id: 'user-2',
+              username: 'asmith',
+              email: 'asmith@example.com',
+              enabled: false,
+            },
+          ],
+          total: 2,
+        };
         return {
           success: true,
-          data: {
-            items: [
-              {
-                id: 'user-1',
-                username: 'jdoe',
-                email: 'jdoe@example.com',
-                enabled: true,
-              },
-              {
-                id: 'user-2',
-                username: 'asmith',
-                email: 'asmith@example.com',
-                enabled: false,
-              },
-            ],
-            total: 2,
-          },
+          data: users,
         };
+      }
       case 'user.enable':
         return {
           success: true,
@@ -171,11 +239,17 @@ export class FakeConnectorService implements Connector {
           success: true,
           data: { id: params['id'] ?? data['id'], attributes: data },
         };
-      case 'group.create':
+      case 'group.create': {
+        const createdGroup: FakeGroupRecord = {
+          id: `group-${Date.now()}`,
+          ...data,
+          status: 'created',
+        };
         return {
           success: true,
-          data: { id: `group-${Date.now()}`, ...data, status: 'created' },
+          data: createdGroup,
         };
+      }
       case 'group.update':
         return {
           success: true,
@@ -195,17 +269,19 @@ export class FakeConnectorService implements Connector {
             members: ['user-1', 'user-2'],
           },
         };
-      case 'group.search':
+      case 'group.search': {
+        const groups: FakeSearchResult<FakeGroupRecord> = {
+          items: [
+            { id: 'group-1', name: 'Admins', members: ['user-1'] },
+            { id: 'group-2', name: 'Users', members: ['user-2'] },
+          ],
+          total: 2,
+        };
         return {
           success: true,
-          data: {
-            items: [
-              { id: 'group-1', name: 'Admins', members: ['user-1'] },
-              { id: 'group-2', name: 'Users', members: ['user-2'] },
-            ],
-            total: 2,
-          },
+          data: groups,
         };
+      }
       case 'group.addMember':
         return {
           success: true,
@@ -224,80 +300,89 @@ export class FakeConnectorService implements Connector {
             action: 'removed',
           },
         };
-      case 'system.test':
-        return { success: true, data: { reachable: true, version: '1.0.0' } };
-      case 'schema.get':
+      case 'system.test': {
+        const systemTest: FakeSystemTestResult = {
+          reachable: true,
+          version: '1.0.0',
+        };
+        return { success: true, data: systemTest };
+      }
+      case 'schema.get': {
+        const schema: FakeSchemaResult = {
+          objectClasses: [
+            {
+              name: 'user',
+              attributes: [
+                {
+                  name: 'id',
+                  type: 'string',
+                  required: true,
+                  multiValued: false,
+                },
+                {
+                  name: 'username',
+                  type: 'string',
+                  required: true,
+                  multiValued: false,
+                },
+                {
+                  name: 'email',
+                  type: 'string',
+                  required: true,
+                  multiValued: false,
+                },
+                {
+                  name: 'groups',
+                  type: 'array',
+                  required: false,
+                  multiValued: true,
+                },
+              ],
+            },
+            {
+              name: 'group',
+              attributes: [
+                {
+                  name: 'id',
+                  type: 'string',
+                  required: true,
+                  multiValued: false,
+                },
+                {
+                  name: 'name',
+                  type: 'string',
+                  required: true,
+                  multiValued: false,
+                },
+                {
+                  name: 'members',
+                  type: 'array',
+                  required: false,
+                  multiValued: true,
+                },
+              ],
+            },
+          ],
+        };
         return {
           success: true,
-          data: {
-            objectClasses: [
-              {
-                name: 'user',
-                attributes: [
-                  {
-                    name: 'id',
-                    type: 'string',
-                    required: true,
-                    multiValued: false,
-                  },
-                  {
-                    name: 'username',
-                    type: 'string',
-                    required: true,
-                    multiValued: false,
-                  },
-                  {
-                    name: 'email',
-                    type: 'string',
-                    required: true,
-                    multiValued: false,
-                  },
-                  {
-                    name: 'groups',
-                    type: 'array',
-                    required: false,
-                    multiValued: true,
-                  },
-                ],
-              },
-              {
-                name: 'group',
-                attributes: [
-                  {
-                    name: 'id',
-                    type: 'string',
-                    required: true,
-                    multiValued: false,
-                  },
-                  {
-                    name: 'name',
-                    type: 'string',
-                    required: true,
-                    multiValued: false,
-                  },
-                  {
-                    name: 'members',
-                    type: 'array',
-                    required: false,
-                    multiValued: true,
-                  },
-                ],
-              },
-            ],
-          },
+          data: schema,
         };
+      }
       case 'sync.full':
-      case 'sync.incremental':
+      case 'sync.incremental': {
+        const syncResult: FakeSyncResult = {
+          mode: op === 'sync.full' ? 'full' : 'incremental',
+          created: 1,
+          updated: 2,
+          deleted: 0,
+          unchanged: 10,
+        };
         return {
           success: true,
-          data: {
-            mode: op === 'sync.full' ? 'full' : 'incremental',
-            created: 1,
-            updated: 2,
-            deleted: 0,
-            unchanged: 10,
-          },
+          data: syncResult,
         };
+      }
       default:
         // Handle the credential-change operation via a prefix match so we do
         // not need to hard-code the literal operation name.
@@ -347,6 +432,7 @@ export class FakeConnectorService implements Connector {
   }
 
   async getSchema(payload: ConnectorPayload): Promise<ConnectorResult> {
+    // Native schema handler keeps schema.get available through the read path.
     return this.execute({
       ...payload,
       payload: { ...payload.payload, params: {} },
@@ -357,6 +443,7 @@ export class FakeConnectorService implements Connector {
     payload: ConnectorPayload,
     mode: string,
   ): Promise<ConnectorResult> {
+    // Native sync handler maps the facade mode to the IDM operation contract.
     const op = mode === 'incremental' ? 'sync.incremental' : 'sync.full';
     return this.execute({ ...payload, operation: op });
   }

@@ -48,6 +48,50 @@ describe('IDM Contract (e2e)', () => {
         ]),
       );
     });
+
+    it('should reject empty routing and idempotency keys', async () => {
+      await request(app.getHttpServer())
+        .post('/webhooks/avanpost')
+        .send({
+          eventId: '   ',
+          operation: 'user.create',
+          targetSystem: 'fake',
+          payload: {},
+        })
+        .expect(400);
+
+      await request(app.getHttpServer())
+        .post('/webhooks/avanpost')
+        .send({
+          eventId: 'e-empty-target',
+          operation: 'user.create',
+          targetSystem: '   ',
+          payload: {},
+        })
+        .expect(400);
+    });
+
+    it('should reject non-object payload zones', async () => {
+      await request(app.getHttpServer())
+        .post('/webhooks/avanpost')
+        .send({
+          eventId: 'e-invalid-payload',
+          operation: 'user.create',
+          targetSystem: 'fake',
+          payload: 'not-object',
+        })
+        .expect(400);
+
+      await request(app.getHttpServer())
+        .post('/webhooks/avanpost')
+        .send({
+          eventId: 'e-invalid-payload-data',
+          operation: 'user.create',
+          targetSystem: 'fake',
+          payload: { data: 'not-object' },
+        })
+        .expect(400);
+    });
   });
 
   describe.each(AVANPOST_OPERATION_VALUES)('operation: %s', (operation) => {
@@ -126,6 +170,15 @@ describe('IDM Contract (e2e)', () => {
         .send({ mode: 'incremental' })
         .expect(201);
       expect(incrementalSyncRes.body).toHaveProperty('mode', 'incremental');
+
+      await request(app.getHttpServer())
+        .get('/idm/fake/users?limit=bad')
+        .expect(400);
+
+      await request(app.getHttpServer())
+        .post('/idm/fake/sync')
+        .send({ mode: 'partial' })
+        .expect(400);
     });
   });
 
@@ -257,6 +310,45 @@ describe('IDM Contract (e2e)', () => {
           expect(body.processed).toBe(true);
           expect(body.data).toBeUndefined();
         }
+      } finally {
+        for (const id of createdIds) {
+          await request(app.getHttpServer()).delete(
+            `/admin/target-systems/${id}`,
+          );
+        }
+      }
+    });
+
+    it('should expose schema and sync for DB-backed target systems', async () => {
+      const suffix = Date.now();
+      const target = `fake-read-${suffix}`;
+      const createdIds: string[] = [];
+
+      try {
+        const createRes = await request(app.getHttpServer())
+          .post('/admin/target-systems')
+          .send({
+            name: target,
+            type: 'fake',
+            label: target,
+            config: { baseUrl: 'fake://local', apiKey: 'read-secret' },
+            enabled: true,
+          })
+          .expect(201);
+        createdIds.push((createRes.body as { id: string }).id);
+
+        const schemaRes = await request(app.getHttpServer())
+          .get(`/idm/${target}/schema`)
+          .expect(200);
+        expect(schemaRes.body).toHaveProperty('objectClasses');
+        expect(JSON.stringify(schemaRes.body)).not.toContain('read-secret');
+
+        const syncRes = await request(app.getHttpServer())
+          .post(`/idm/${target}/sync`)
+          .send({ mode: 'incremental' })
+          .expect(201);
+        expect(syncRes.body).toHaveProperty('mode', 'incremental');
+        expect(JSON.stringify(syncRes.body)).not.toContain('read-secret');
       } finally {
         for (const id of createdIds) {
           await request(app.getHttpServer()).delete(

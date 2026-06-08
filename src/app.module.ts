@@ -17,10 +17,27 @@ import { MetricsModule } from './metrics/metrics.module';
 import { HttpMetricsMiddleware } from './metrics/http-metrics.middleware';
 import { applyPamCompatibility } from './secrets/legacy-compat';
 import { SecurityModule } from './security/security.module';
+import { AuthModule } from './auth/auth.module';
+import { AdminAuthMiddleware } from './auth/admin-auth.middleware';
+import { AdminUiModule } from './admin-ui/admin-ui.module';
 
 applyPamCompatibility();
 
 const isLightweight = process.env['LIGHTWEIGHT_MODE'] === 'true';
+const adminUiApiExcludes = [
+  '/admin/{*any}',
+  '/api/{*any}',
+  '/auth/{*any}',
+  '/health/{*any}',
+  '/idm/{*any}',
+  '/idm-emulator/{*any}',
+  '/metrics/{*any}',
+  '/mock-idm/{*any}',
+  '/webhooks/{*any}',
+  '/assets/{*any}',
+  '/favicon.svg',
+  '/icons.svg',
+];
 
 @Module({
   imports: [
@@ -40,12 +57,14 @@ const isLightweight = process.env['LIGHTWEIGHT_MODE'] === 'true';
     DiagnosticsModule,
     SecretsModule,
     SecurityModule,
+    AuthModule,
     PrismaModule,
     HealthModule,
     MockIdmModule,
     WebhooksModule,
     ...(isLightweight ? [] : [KafkaModule]),
     AdminModule,
+    AdminUiModule,
     MetricsModule,
     ServeStaticModule.forRootAsync({
       useFactory: (config: ConfigService) => {
@@ -63,7 +82,8 @@ const isLightweight = process.env['LIGHTWEIGHT_MODE'] === 'true';
             ? [
                 {
                   rootPath: join(__dirname, '..', 'ui', 'dist'),
-                  serveRoot: '/',
+                  renderPath: '{*any}',
+                  exclude: adminUiApiExcludes,
                   serveStaticOptions: {
                     index: 'index.html',
                   },
@@ -78,6 +98,6 @@ const isLightweight = process.env['LIGHTWEIGHT_MODE'] === 'true';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
-    consumer.apply(HttpMetricsMiddleware).forRoutes('*');
+    consumer.apply(HttpMetricsMiddleware, AdminAuthMiddleware).forRoutes('*');
   }
 }

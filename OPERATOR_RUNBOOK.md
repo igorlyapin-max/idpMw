@@ -6,10 +6,11 @@
 
 1. [Проверка здоровья](#проверка-здоровья)
 2. [Security: TLS и шифрование](#security-tls-и-шифрование)
-3. [DLQ: диагностика и ротация](#dlq-диагностика-и-ротация)
-4. [Ручной retry](#ручной-retry)
-5. [Мониторинг и алерты](#мониторинг-и-алерты)
-6. [Инциденты](#инциденты)
+3. [Admin UI auth](#admin-ui-auth)
+4. [DLQ: диагностика и ротация](#dlq-диагностика-и-ротация)
+5. [Ручной retry](#ручной-retry)
+6. [Мониторинг и алерты](#мониторинг-и-алерты)
+7. [Инциденты](#инциденты)
 
 ## Проверка здоровья
 
@@ -89,6 +90,48 @@ FROM "EncryptionState";
 Старый ключ удалять только после завершения DB rotation, drain Kafka backlog и
 истечения Redis/idempotency TTL window.
 
+## Admin UI auth
+
+В production Admin UI должен работать с `ADMIN_AUTH_ENABLED=true`.
+Поддерживаются local credentials и SSO через headers от reverse proxy/IdP.
+
+Local режим:
+
+```env
+ADMIN_UI_ENABLED=true
+ADMIN_AUTH_ENABLED=true
+ADMIN_AUTH_MODE=local
+ADMIN_AUTH_LOCAL_USERNAME=admin
+ADMIN_AUTH_LOCAL_PASSWORD=<strong-password-or-secret-ref>
+ADMIN_AUTH_SESSION_SECRET=<long-random-secret>
+HTTP_TLS_ENABLED=true
+```
+
+SSO режим:
+
+```env
+ADMIN_AUTH_ENABLED=true
+ADMIN_AUTH_MODE=sso
+ADMIN_AUTH_SESSION_SECRET=<long-random-secret>
+ADMIN_AUTH_SSO_USER_HEADER=x-authenticated-user
+ADMIN_AUTH_SSO_GROUPS_HEADER=x-authenticated-groups
+ADMIN_AUTH_ALLOWED_GROUPS=idmmw-admins
+```
+
+Проверка:
+
+```bash
+curl -s -c /tmp/idmmw.cookies \
+  -H "Content-Type: application/json" \
+  -X POST http://localhost:3010/auth/login \
+  -d '{"username":"admin","password":"<password>"}' | jq .
+curl -s -b /tmp/idmmw.cookies http://localhost:3010/admin/stats | jq .
+```
+
+Если auth включён, все write-запросы к `/admin/*` должны передавать
+`X-CSRF-Token` из `/auth/session` или ответа `/auth/login`. `/health`,
+`/metrics`, `/webhooks/avanpost` и `/idm/*` не требуют Admin UI session.
+
 ## DLQ: диагностика и ротация
 
 ### Проверить размер DLQ
@@ -96,9 +139,11 @@ FROM "EncryptionState";
 ```bash
 # Через API
 curl -s http://localhost:3010/admin/dlq | jq 'length'
+curl -s http://localhost:3010/admin/stats | jq '.dlq'
 
 # Через метрики
 curl -s http://localhost:3010/metrics | grep idmmw_dlq_size
+curl -s http://localhost:3010/metrics | grep idmmw_events_processed_last_5m
 
 # Через БД
 docker exec idmmw-postgres psql -U idmmw -d idmmw -c 'SELECT status, COUNT(*) FROM "DlqItem" GROUP BY status;'
@@ -125,15 +170,20 @@ curl -X POST http://localhost:3010/admin/dlq/<id>/retry
 # 3. Skip (если ошибка необратима)
 curl -X POST http://localhost:3010/admin/dlq/<id>/skip
 
-# 4. Массовый retry всех pending (через SQL, только аварийно: API использует retry lease)
-docker exec idmmw-postgres psql -U idmmw -d idmmw -c '
-  UPDATE "DlqItem" SET status = '"'"'retrying'"'"' WHERE status = '"'"'pending'"'"';
-'
+# 4. Массовый retry pending по одной управляемой системе
+curl -X POST http://localhost:3010/admin/dlq/retry \
+  -H "Content-Type: application/json" \
+  -d '{"targetSystem":"zabbix-prod","status":"pending","limit":25}'
 ```
 
 ### Через Admin UI
 
-Открыть `http://localhost:3010/` → таблица DLQ → фильтр по статусу → Retry / Skip.
+Открыть `http://localhost:3010/` → таблица DLQ → фильтр по статусу и
+`targetSystem` → `Retry selected`, row-level `Retry` или `Skip`.
+
+Retry параметры управляются на странице `Target Systems` в блоке
+`DLQ retry policy`: `maxRetries`, `baseDelayMs`, `maxDelayMs`,
+`dlqLeaseSeconds`, `jitter`.
 
 ## Ручной retry
 
@@ -144,9 +194,10 @@ curl -X POST http://localhost:3010/admin/dlq/<id>/retry
 # → {"success":true}
 ```
 
-При включённом Kafka событие отправляется в topic из `KAFKA_TOPIC_DLQ_RETRY`
-и получает retry lease (`lockedAt`, `lockedBy`), чтобы несколько workers не
-забрали один и тот же DLQ item.
+При включённом Kafka событие отправляется в topic из `KAFKA_TOPIC_DLQ_RETRY`.
+При выключенной Kafka middleware выполняет retry синхронно и помечает DLQ item
+`resolved` при успехе. В обоих режимах item получает retry lease (`lockedAt`,
+`lockedBy`), чтобы несколько workers не забрали один и тот же DLQ item.
 
 ### Retry через SQL
 
@@ -172,6 +223,7 @@ curl -s http://localhost:3010/admin/dlq | jq '.[] | select(.id=="<uuid>") | {id,
 | Метрика                                         | Порог          | Действие                             |
 | ----------------------------------------------- | -------------- | ------------------------------------ |
 | `idmmw_dlq_size{status="pending"}`              | > 100          | Проверить коннекторы, массовый retry |
+| `idmmw_events_processed_last_5m`                | резкое падение | Проверить входящий поток и workers   |
 | `idmmw_connector_errors_total`                  | > 10/мин       | Проверить целевые системы            |
 | `idmmw_http_request_duration_seconds` p95       | > 2s           | Проверить нагрузку, БД               |
 | `idmmw_events_processed_total{status="failed"}` | > 50% от total | Критический инцидент                 |

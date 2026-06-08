@@ -104,6 +104,28 @@ export const appConfigSchema = z
       .string()
       .transform((v) => v === 'true')
       .default(false),
+    ADMIN_AUTH_ENABLED: z
+      .string()
+      .transform((v) => v === 'true')
+      .default(false),
+    ADMIN_AUTH_MODE: z.enum(['local', 'sso', 'both']).default('local'),
+    ADMIN_AUTH_LOCAL_USERNAME: z.string().optional(),
+    ADMIN_AUTH_LOCAL_PASSWORD: z.string().optional(),
+    ADMIN_AUTH_SESSION_SECRET: z.string().optional(),
+    ADMIN_AUTH_SESSION_TTL_SECONDS: z.string().transform(Number).default(28800),
+    ADMIN_AUTH_COOKIE_NAME: z.string().default('idmmw_admin_session'),
+    ADMIN_AUTH_COOKIE_SECURE: z
+      .string()
+      .transform((v) => v === 'true')
+      .optional(),
+    ADMIN_AUTH_COOKIE_SAMESITE: z
+      .enum(['Strict', 'Lax', 'None'])
+      .default('Strict'),
+    ADMIN_AUTH_ALLOWLIST: z.string().optional(),
+    ADMIN_AUTH_ALLOWED_GROUPS: z.string().optional(),
+    ADMIN_AUTH_SSO_USER_HEADER: z.string().default('x-authenticated-user'),
+    ADMIN_AUTH_SSO_GROUPS_HEADER: z.string().default('x-authenticated-groups'),
+    ADMIN_AUTH_SSO_GROUPS_DELIMITER: z.string().default(','),
     HTTP_TLS_ENABLED: z
       .string()
       .transform((v) => v === 'true')
@@ -156,6 +178,41 @@ export const appConfigSchema = z
         message:
           'IDMMW_PROCESSING_MODE=async requires KAFKA_ENABLED=true and reachable Kafka brokers',
       });
+    }
+    if (config.ADMIN_AUTH_ENABLED) {
+      if (!config.ADMIN_AUTH_SESSION_SECRET) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['ADMIN_AUTH_SESSION_SECRET'],
+          message:
+            'ADMIN_AUTH_SESSION_SECRET is required when ADMIN_AUTH_ENABLED=true',
+        });
+      }
+      if (
+        (config.ADMIN_AUTH_MODE === 'local' ||
+          config.ADMIN_AUTH_MODE === 'both') &&
+        (!config.ADMIN_AUTH_LOCAL_USERNAME || !config.ADMIN_AUTH_LOCAL_PASSWORD)
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['ADMIN_AUTH_LOCAL_USERNAME'],
+          message:
+            'Local admin auth requires ADMIN_AUTH_LOCAL_USERNAME and ADMIN_AUTH_LOCAL_PASSWORD',
+        });
+      }
+      if (
+        (config.ADMIN_AUTH_MODE === 'sso' ||
+          config.ADMIN_AUTH_MODE === 'both') &&
+        !config.ADMIN_AUTH_ALLOWLIST &&
+        !config.ADMIN_AUTH_ALLOWED_GROUPS
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['ADMIN_AUTH_ALLOWLIST'],
+          message:
+            'SSO admin auth requires ADMIN_AUTH_ALLOWLIST or ADMIN_AUTH_ALLOWED_GROUPS',
+        });
+      }
     }
   });
 

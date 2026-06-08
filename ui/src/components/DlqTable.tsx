@@ -8,60 +8,59 @@ interface Props {
 
 export function DlqTable({ items, onRetry, onSkip }: Props) {
   if (items.length === 0) {
-    return <p>DLQ is empty</p>;
+    return <div className="empty-state">DLQ is empty</div>;
   }
 
   return (
-    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+    <table className="data-table">
       <thead>
-        <tr style={{ borderBottom: '2px solid #ccc' }}>
-          <th style={{ textAlign: 'left', padding: '8px' }}>Event ID</th>
-          <th style={{ textAlign: 'left', padding: '8px' }}>Operation</th>
-          <th style={{ textAlign: 'left', padding: '8px' }}>Target</th>
-          <th style={{ textAlign: 'left', padding: '8px' }}>Status</th>
-          <th style={{ textAlign: 'left', padding: '8px' }}>Error</th>
-          <th style={{ textAlign: 'left', padding: '8px' }}>Created</th>
-          <th style={{ textAlign: 'left', padding: '8px' }}>Actions</th>
+        <tr>
+          <th>Event ID</th>
+          <th>Operation</th>
+          <th>Target</th>
+          <th>Status</th>
+          <th>Error</th>
+          <th>Created</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>
         {items.map((item) => (
-          <tr key={item.id} style={{ borderBottom: '1px solid #eee' }}>
-            <td style={{ padding: '8px', fontSize: '0.85rem' }}>{item.eventId}</td>
-            <td style={{ padding: '8px' }}>{item.operation}</td>
-            <td style={{ padding: '8px' }}>{item.targetSystem}</td>
-            <td style={{ padding: '8px' }}>
-              <span
-                style={{
-                  padding: '2px 8px',
-                  borderRadius: '4px',
-                  backgroundColor:
-                    item.status === 'pending'
-                      ? '#fff3cd'
-                      : item.status === 'resolved'
-                        ? '#d4edda'
-                        : item.status === 'skipped'
-                          ? '#f8d7da'
-                          : '#e2e3e5',
-                }}
-              >
-                {item.status}
-              </span>
+          <tr key={item.id}>
+            <td className="mono" title={item.eventId}>
+              {item.eventId}
             </td>
-            <td style={{ padding: '8px', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <td>{item.operation}</td>
+            <td>{item.targetSystem}</td>
+            <td>
+              <span className={`badge ${item.status}`}>{item.status}</span>
+            </td>
+            <td className="truncate" title={item.error}>
               {item.error}
             </td>
-            <td style={{ padding: '8px', fontSize: '0.85rem' }}>
+            <td className="mono">
               {new Date(item.createdAt).toLocaleString()}
             </td>
-            <td style={{ padding: '8px' }}>
-              {item.status === 'pending' && (
+            <td>
+              {item.status === 'pending' || item.status === 'retrying' ? (
                 <>
-                  <button onClick={() => onRetry(item.id)} style={{ marginRight: '4px' }}>
-                    Retry
-                  </button>
-                  <button onClick={() => onSkip(item.id)}>Skip</button>
+                  <div className="actions">
+                    <button
+                      className="button small"
+                      onClick={() => onRetry(item.id)}
+                    >
+                      Retry
+                    </button>
+                    <button
+                      className="button danger small"
+                      onClick={() => onSkip(item.id)}
+                    >
+                      Skip
+                    </button>
+                  </div>
                 </>
+              ) : (
+                <span className="mono">-</span>
               )}
             </td>
           </tr>

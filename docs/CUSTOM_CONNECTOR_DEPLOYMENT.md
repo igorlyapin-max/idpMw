@@ -30,7 +30,7 @@
 | NestJS     | 11+           |
 | TypeScript | strict        |
 | Prisma     | latest        |
-| React      | 18 (Admin UI) |
+| React      | 19 (Admin UI) |
 
 ### Роли и ответственность
 
@@ -312,12 +312,27 @@ const TYPE_OPTIONS = ['zabbix', 'cmdbuild', 'rest', 'db', 'fake', 'my-system'];
 const TYPE_FIELDS: Record<string, ConfigField[]> = {
   // ... другие типы
   'my-system': [
-    { name: 'baseUrl', label: 'Base URL' },
-    { name: 'apiKey', label: 'API Key (optional)' },
-    { name: 'timeout', label: 'Timeout ms (optional)' },
+    {
+      name: 'baseUrl',
+      label: 'Base URL',
+      placeholder: 'https://api.internal.local',
+      help: 'Target API root URL.',
+    },
+    {
+      name: 'apiKey',
+      label: 'API key',
+      inputType: 'password',
+      help: 'Optional bearer/API secret used by the connector.',
+    },
+    { name: 'timeout', label: 'Timeout ms' },
   ],
 };
 ```
+
+Имена `TYPE_FIELDS[].name` должны совпадать с реальными ключами
+`TargetSystem.config`, которые читает коннектор. Не добавляйте абстрактные поля
+вроде `code`, если коннектор ожидает `apiToken`, `password`, `apiKey` или другой
+конкретный ключ.
 
 Пересоберите UI:
 
@@ -367,6 +382,11 @@ curl -X POST http://localhost:3010/admin/target-systems \
   }'
 ```
 
+Если `ADMIN_AUTH_ENABLED=true`, перед вызовом `/admin/*` получите admin
+session через `/auth/login` или `/auth/sso-login`. Для state-changing запросов
+(`POST`, `PATCH`, `DELETE`) передавайте `X-CSRF-Token` из ответа login или
+`/auth/session`.
+
 **Через Admin UI:**
 Откройте `http://localhost:3010/` → **Target Systems** → **Create**.
 
@@ -411,7 +431,13 @@ curl -X POST http://localhost:3010/admin/target-systems \
   "baseUrl": "https://api.example.com",
   "timeout": 15000,
   "apiKey": "...",
-  "retryAttempts": 3,
+  "retryPolicy": {
+    "maxRetries": 3,
+    "baseDelayMs": 1000,
+    "maxDelayMs": 30000,
+    "dlqLeaseSeconds": 300,
+    "jitter": true
+  },
   "tls": {
     "enabled": true,
     "caPath": "/etc/idmmw/tls/target-ca.crt",
@@ -425,6 +451,9 @@ curl -X POST http://localhost:3010/admin/target-systems \
 
 Коннектор обязан валидировать наличие обязательных полей самостоятельно в методе `execute`.
 Если `tls.enabled=true`, URL целевой системы должен использовать `https://`.
+`retryPolicy` применяется idmMw к write-событиям и ручному DLQ retry для
+конкретного `TargetSystem`; коннектор не должен реализовывать собственный
+глобальный счётчик попыток поверх этого контракта.
 Подробный security runbook: `docs/SECURITY_TLS_ENCRYPTION.md`.
 
 ### 4.3 Управление учётными данными
@@ -466,10 +495,14 @@ DATABASE_URL=file:./data/idmmw.db
 - Single worker (no clustering); для HA включайте общую БД, Redis и/или Kafka.
 - JSON поля хранятся как сериализованные строки.
 
-### 5.2 Production (PostgreSQL + Redis + Kafka)
+### 5.2 Stand/dev deployment (PostgreSQL + Redis + Kafka)
+
+`docker-compose.dev.yml` предназначен для dev/stand развёртывания и проверки
+интеграции. Для production используйте управляемые PostgreSQL-compatible БД,
+Redis/Kafka, systemd/Kubernetes/Compose profile с production secrets и TLS.
 
 ```bash
-# Инфраструктура
+# Dev/stand инфраструктура
 docker compose -f docker-compose.dev.yml up -d
 
 # Миграции
@@ -517,6 +550,9 @@ npm test -- my-system
 curl -X POST http://localhost:3010/admin/target-systems/<id>/test
 ```
 
+При включённом `ADMIN_AUTH_ENABLED=true` этот endpoint требует admin session, а
+запрос должен содержать `X-CSRF-Token`.
+
 **Ожидаемые ответы:**
 
 ```json
@@ -531,7 +567,7 @@ curl -X POST http://localhost:3010/admin/target-systems/<id>/test
 
 ```bash
 # 1. Создание пользователя
-curl -X POST http://localhost:3010/mock-idm/scenario/create-user \
+curl -X POST http://localhost:3010/mock-idm/scenario/user-create \
   -H "Content-Type: application/json" \
   -d '{
     "eventId": "test-custom-001",
@@ -544,8 +580,12 @@ curl -X POST http://localhost:3010/mock-idm/scenario/create-user \
 **Проверки после E2E:**
 
 ```bash
-# 2. Проверить AuditLog — должна быть запись
-curl -s "http://localhost:3010/admin/audit-log?eventId=test-custom-001" | jq .
+# 2. Проверить обработку в structured logs
+tail -50 /tmp/idmmw.log | grep "test-custom-001"
+
+# 2a. Если нужен прямой DB check, проверьте AuditLog через Prisma/SQL
+psql "$DATABASE_URL" -c \
+  "select \"eventId\", operation, \"targetSystem\" from \"AuditLog\" where \"eventId\" = 'test-custom-001';"
 
 # 3. Проверить, что DLQ не растёт
 curl -s http://localhost:3010/metrics | grep idmmw_dlq_size

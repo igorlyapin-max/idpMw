@@ -1,5 +1,9 @@
 /**
- * Full operation contract for Avanpost IDM 7.8 connector SDK.
+ * idmMw operation vocabulary used by the Avanpost-compatible webhook contract.
+ *
+ * This is not the native Avanpost IDM `IProvisioningConnector` method list.
+ * Native Avanpost connectors are .NET assemblies; idmMw exposes an HTTP
+ * middleware contract for scripts, business processes, and event handlers.
  */
 
 // Constructed dynamically.

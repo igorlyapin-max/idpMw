@@ -11,7 +11,11 @@ import {
 import { TargetSystemService } from '../../admin/target-system.service';
 import { ConnectorRegistry } from '../../connectors/connector.registry';
 import { createConnectorCapabilities } from '../../connectors/connector.capabilities';
-import type { ConnectorCapabilities } from '../../connectors/connector.interface';
+import type {
+  ConnectorCapabilities,
+  ConnectorPayload,
+  ConnectorResult,
+} from '../../connectors/connector.interface';
 
 interface TargetSystemRecord {
   name: string;
@@ -32,6 +36,8 @@ interface IdmTargetSystemCatalogItem {
   operationStatus: ConnectorCapabilities['operationStatus'];
   partialOperations?: Record<string, string>;
 }
+
+type SyncMode = 'full' | 'incremental';
 
 @Controller('idm')
 export class IdmController {
@@ -84,7 +90,7 @@ export class IdmController {
   ) {
     const result = await this.executeRead(name, 'user.search', {
       filter,
-      limit: limit ? parseInt(limit, 10) : 50,
+      limit: this.parseLimit(limit),
     });
     return result.data;
   }
@@ -118,7 +124,7 @@ export class IdmController {
   ) {
     const result = await this.executeRead(name, 'group.search', {
       filter,
-      limit: limit ? parseInt(limit, 10) : 50,
+      limit: this.parseLimit(limit),
     });
     return result.data;
   }
@@ -138,13 +144,14 @@ export class IdmController {
   @Post(':targetSystem/sync')
   async sync(
     @Param('targetSystem') name: string,
-    @Body() body: { mode?: 'full' | 'incremental' },
+    @Body() body?: { mode?: unknown },
   ) {
-    const mode = body.mode ?? 'full';
+    const mode = this.parseSyncMode(body?.mode);
     const result = await this.executeRead(
       name,
       mode === 'incremental' ? 'sync.incremental' : 'sync.full',
       {},
+      mode,
     );
     return result.data;
   }
@@ -153,6 +160,7 @@ export class IdmController {
     name: string,
     operation: string,
     params: Record<string, unknown>,
+    syncMode?: SyncMode,
   ) {
     const ts = await this.targetSystemService.findByName(name);
     const connector = this.registry.get(name);
@@ -160,19 +168,56 @@ export class IdmController {
       throw new NotFoundException(`Target system not found: ${name}`);
     }
 
-    const result = await connector.execute({
+    const connectorPayload: ConnectorPayload = {
       operation,
       targetSystem: name,
       payload: {
         ...(ts ? { config: ts.config } : {}),
         params,
       },
-    });
+    };
+
+    let result: ConnectorResult;
+    if (operation === 'schema.get' && connector.getSchema) {
+      result = await connector.getSchema(connectorPayload);
+    } else if (
+      (operation === 'sync.full' || operation === 'sync.incremental') &&
+      connector.sync
+    ) {
+      result = await connector.sync(
+        connectorPayload,
+        syncMode ?? (operation === 'sync.incremental' ? 'incremental' : 'full'),
+      );
+    } else {
+      result = await connector.execute(connectorPayload);
+    }
 
     if (!result.success) {
       throw new BadRequestException(result.error ?? 'Connector failed');
     }
     return result;
+  }
+
+  private parseLimit(limit?: string): number {
+    if (limit === undefined) {
+      return 50;
+    }
+
+    const parsed = Number(limit);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      throw new BadRequestException('limit must be a positive integer');
+    }
+    return parsed;
+  }
+
+  private parseSyncMode(mode: unknown): SyncMode {
+    if (mode === undefined) {
+      return 'full';
+    }
+    if (mode === 'full' || mode === 'incremental') {
+      return mode;
+    }
+    throw new BadRequestException('mode must be full or incremental');
   }
 
   private toCatalogItem(

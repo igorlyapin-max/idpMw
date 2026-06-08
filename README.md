@@ -5,7 +5,7 @@
 ## Стек
 
 - **Backend:** Node.js 20+, NestJS 11+, TypeScript strict
-- **Frontend:** React 18, Vite, TypeScript
+- **Frontend:** React 19, Vite, TypeScript
 - **Database:** PostgreSQL 15+ (dev) / CockroachDB или YugabyteDB (prod)
 - **ORM:** Prisma
 - **Cache/Lock:** PostgreSQL или Redis idempotency store
@@ -66,33 +66,37 @@ docker compose -f docker-compose.monitoring.yml up -d
 - Prometheus: `http://localhost:9090`
 - Grafana: `http://localhost:3000` (admin/admin)
 - Метрики приложения: `http://localhost:3010/metrics`
+- Admin summary: `GET http://localhost:3010/admin/stats` показывает DLQ size,
+  processed events за последние 5 минут и состояние Kafka/Redis mode.
 
 ## Архитектура
 
 ### Компоненты
 
-| Компонент          | Описание                                                                          |
-| ------------------ | --------------------------------------------------------------------------------- |
-| Webhook Controller | Приём событий от Avanpost IDM (`POST /webhooks/avanpost`)                         |
-| Idempotency        | Предотвращение дубликатов через PostgreSQL `IdempotencyKey` или Redis `SET NX EX` |
-| Retry              | Экспоненциальный backoff, max 3 попытки                                           |
-| DLQ                | Хранение неуспешных событий для ручной обработки                                  |
-| Audit              | Логирование всех входящих и исходящих вызовов                                     |
-| Dispatcher         | Маршрутизация событий → коннекторы                                                |
-| Connectors         | REST, DB (SQL через knex), Zabbix, CMDBuild                                       |
-| Kafka (опц.)       | Event mirror, DLQ retry и async worker pipeline                                   |
-| Admin API          | DLQ management, Target Systems management                                         |
-| Admin UI           | React-приложение для управления DLQ и Target Systems                              |
+| Компонент          | Описание                                                                                                        |
+| ------------------ | --------------------------------------------------------------------------------------------------------------- |
+| Webhook Controller | Приём событий от Avanpost IDM (`POST /webhooks/avanpost`)                                                       |
+| Idempotency        | Предотвращение дубликатов через PostgreSQL `IdempotencyKey` или Redis `SET NX EX`                               |
+| Retry              | Экспоненциальный backoff, max 3 попытки по умолчанию; можно переопределить на `TargetSystem.config.retryPolicy` |
+| DLQ                | Хранение неуспешных событий для ручной обработки                                                                |
+| Audit              | Логирование всех входящих и исходящих вызовов                                                                   |
+| Dispatcher         | Маршрутизация событий → коннекторы                                                                              |
+| Connectors         | REST, DB (SQL через knex), Zabbix, CMDBuild                                                                     |
+| Kafka (опц.)       | Event mirror, DLQ retry и async worker pipeline                                                                 |
+| Admin API          | DLQ management, Target Systems management, protected by optional admin auth                                     |
+| Admin UI           | React-приложение для DLQ, Target Systems и ручного retry                                                        |
 
 ### IDM multi-target contract
 
-Avanpost IDM взаимодействует с одним endpoint микросервиса:
+Avanpost IDM взаимодействует с idmMw как с одним middleware endpoint для многих
+целевых систем:
 
 ```text
 POST /webhooks/avanpost
 ```
 
-Один запрос адресован одной целевой системе. Для работы с несколькими системами IDM отправляет несколько запросов в тот же endpoint, меняя `targetSystem` и используя уникальный `eventId` на пару бизнес-событие + целевая система:
+Один webhook адресован одной системе. Для нескольких систем IDM отправляет
+несколько webhook в тот же endpoint, меняя `targetSystem`.
 
 ```json
 {
@@ -107,35 +111,19 @@ POST /webhooks/avanpost
 }
 ```
 
-`targetSystem` должен совпадать либо со static connector name (`fake`, `rest`, `db`, `zabbix`, `cmdbuild`), либо с `TargetSystem.name` из БД (`zabbix-prod`, `cmdbuild-prod`, `portal-hr`).
+Правила контракта:
 
-Для явной проверки доступных систем middleware отдаёт IDM-facing catalog:
+- `targetSystem = TargetSystem.name` из БД или static connector name для legacy
+  mode.
+- `eventId = бизнес-событие + targetSystem`, чтобы одно бизнес-событие могло
+  безопасно уйти в несколько систем без idempotency collision.
+- `payload.data` содержит данные изменения, `payload.params` содержит
+  query/path-like параметры read operations.
+- `/idm/target-systems` и `/idm/:targetSystem/*` используются как IDM-facing
+  catalog/read facade и не возвращают `config` или секреты.
 
-```text
-GET /idm/target-systems
-GET /idm/target-systems/:name
-```
-
-Каталог содержит только включённые `TargetSystem` из БД, которые доступны через `ConnectorRegistry`. В ответе нет `config`, токенов, паролей и других секретов. Для каждой системы возвращаются `operations`, `readOperations`, `writeOperations`, `capabilities`, `operationStatus` и `partialOperations`, если часть операций реализована с ограниченной семантикой. Это не автоматический service discovery Avanpost IDM: IDM по-прежнему вызывает один endpoint middleware, а список используется как контракт/справочник для настройки нескольких систем за одним микросервисом.
-
-Поддерживаемые IDM operations:
-
-```text
-user.create, user.update, user.delete, user.get, user.search,
-user.enable, user.disable, user.lock, user.unlock, user.changePassword,
-user.resolve, user.addAttributes, user.removeAttributes,
-group.create, group.update, group.delete, group.get, group.search,
-group.addMember, group.removeMember,
-system.test, schema.get, sync.full, sync.incremental
-```
-
-Response semantics:
-
-| Тип операции                                                                      | Поведение                                                                                                                                                                                                                                       |
-| --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Write (`user.create`, `group.addMember`, ...)                                     | Возвращает `received=true`, `processed=true`, без `data`. Если коннектор вернул сбой после retry, событие уходит в DLQ и запрос считается принятым. Системные ошибки маршрутизации, например неизвестный `targetSystem`, возвращают HTTP error. |
-| Read/test/sync (`user.get`, `user.search`, `system.test`, `schema.get`, `sync.*`) | Возвращает `received=true`, `processed=true`, `data` с результатом целевой системы. При ошибке возвращается HTTP error, без DLQ/retry.                                                                                                          |
-| Duplicate `eventId`                                                               | Возвращает `received=true`, `processed=false`; dispatch в целевую систему не выполняется.                                                                                                                                                       |
+Подробная инструкция администратора IDM:
+[docs/IDM_ADMIN_DEPLOYMENT.md](docs/IDM_ADMIN_DEPLOYMENT.md).
 
 ### Feature-флаги
 
@@ -147,6 +135,8 @@ KAFKA_ENABLED=false          # true включает Kafka producer/consumer
 IDMMW_PROCESSING_MODE=sync   # sync | async
 DB_CONNECTOR_ENABLED=false   # true для SQL-коннектора
 ADMIN_UI_ENABLED=true        # true для раздачи React UI
+ADMIN_AUTH_ENABLED=false     # true включает auth guard для /admin/*
+ADMIN_AUTH_MODE=local        # local | sso | both
 DebugLogging__Enabled=false  # true для diagnostic logging
 DebugLogging__Level=Basic    # Basic | Verbose
 LOG_SINK=stdout              # stdout | file
@@ -169,6 +159,7 @@ LOG_FILE_PATH=/tmp/idmmw.log # используется при LOG_SINK=file
 Кратко:
 
 - TLS управляется отдельно для каждого соединения: `HTTP_TLS_*`, `REDIS_TLS_*`, `KAFKA_TLS_*`, `DB_CONNECTOR_TLS_*`, а для целевых систем через `config.tls`.
+- Admin UI использует тот же listener/TLS, что inbound API. В production включайте `ADMIN_AUTH_ENABLED=true`; поддерживаются local credentials и SSO headers с allowlist/groups.
 - При `ENCRYPTION_ENABLED=true` шифруются audit/DLQ/TargetSystem JSON поля, Kafka payloads и idempotency keys через HMAC.
 - Первое включение шифрования допускается только на пустой системе.
 - Key rotation выполняется в maintenance mode командой `npm run security:rotate-key`.
@@ -242,6 +233,16 @@ DB_CONNECTOR_TLS_ENABLED=false
 # Admin UI
 ADMIN_UI_ENABLED=true
 ADMIN_UI_SERVE_STATIC=true
+ADMIN_AUTH_ENABLED=false
+ADMIN_AUTH_MODE=local                # local | sso | both
+ADMIN_AUTH_LOCAL_USERNAME=admin
+ADMIN_AUTH_LOCAL_PASSWORD=change-me
+ADMIN_AUTH_SESSION_SECRET=           # длинный random secret, required when auth enabled
+ADMIN_AUTH_COOKIE_SECURE=            # default: true in production or when HTTP_TLS_ENABLED=true
+ADMIN_AUTH_ALLOWLIST=                # SSO users, comma-separated
+ADMIN_AUTH_ALLOWED_GROUPS=           # SSO groups, comma-separated
+ADMIN_AUTH_SSO_USER_HEADER=x-authenticated-user
+ADMIN_AUTH_SSO_GROUPS_HEADER=x-authenticated-groups
 HTTP_TLS_ENABLED=false
 
 # Mock IDM (только dev/test)
@@ -302,7 +303,13 @@ npm run test:ha-live
 | GET    | `/idm/:targetSystem/groups/:id`    | Read facade: группа целевой системы               |
 | GET    | `/idm/:targetSystem/schema`        | Read facade: schema целевой системы               |
 | POST   | `/idm/:targetSystem/sync`          | Read facade: `sync.full` или `sync.incremental`   |
-| GET    | `/admin/dlq`                       | Список DLQ (фильтры, пагинация)                   |
+| GET    | `/auth/session`                    | Состояние Admin UI auth session                   |
+| POST   | `/auth/login`                      | Local admin login                                 |
+| POST   | `/auth/sso-login`                  | SSO header-based admin login                      |
+| POST   | `/auth/logout`                     | Завершить admin session                           |
+| GET    | `/admin/stats`                     | DLQ size и processed last 5 minutes               |
+| GET    | `/admin/dlq`                       | Список DLQ (`status`, `targetSystem`, пагинация)  |
+| POST   | `/admin/dlq/retry`                 | Массовый retry по статусу/целевой системе         |
 | POST   | `/admin/dlq/:id/retry`             | Повторная обработка                               |
 | POST   | `/admin/dlq/:id/skip`              | Пропустить событие                                |
 | GET    | `/metrics`                         | Prometheus метрики                                |
@@ -313,14 +320,19 @@ npm run test:ha-live
 | DELETE | `/admin/target-systems/:id`        | Удалить target system                             |
 | POST   | `/admin/target-systems/:id/test`   | Проверить связь                                   |
 
+Когда `ADMIN_AUTH_ENABLED=true`, все `/admin/*` endpoints требуют admin session.
+State-changing запросы (`POST`, `PATCH`, `DELETE`) должны передавать
+`X-CSRF-Token` из `/auth/session` или ответа login. `/health`, `/metrics`,
+`/webhooks/avanpost` и `/idm/*` не блокируются Admin UI auth.
+
 ## Mock IDM (dev/test)
 
 Модуль для тестирования без реального Avanpost IDM:
 
 ```bash
-POST /mock-idm/scenario/create-user   # Создание пользователя
-POST /mock-idm/scenario/update-user   # Обновление
-POST /mock-idm/scenario/delete-user   # Удаление
+POST /mock-idm/scenario/user-create   # Создание пользователя
+POST /mock-idm/scenario/user-update   # Обновление
+POST /mock-idm/scenario/user-delete   # Удаление
 POST /mock-idm/scenario/duplicate     # Дубликат (проверка idempotency)
 POST /mock-idm/scenario/malformed     # Невалидный payload
 POST /mock-idm/scenario/fail          # Ошибка коннектора → DLQ
@@ -423,13 +435,25 @@ POST /admin/target-systems
   "label": "Zabbix Production",
   "config": {
     "baseUrl": "http://zabbix.local",
-    "apiToken": "..."
+    "apiToken": "...",
+    "retryPolicy": {
+      "maxRetries": 5,
+      "baseDelayMs": 1000,
+      "maxDelayMs": 30000,
+      "dlqLeaseSeconds": 600,
+      "jitter": true
+    }
   },
   "enabled": true
 }
 ```
 
 Поддерживаемые типы: `zabbix`, `cmdbuild`, `rest`, `db`, `fake`.
+
+`retryPolicy` задаётся для конкретной управляемой системы. Он применяется к
+обычной обработке write-событий и к ручному DLQ retry. Если политика не задана,
+используются defaults: `maxRetries=3`, `baseDelayMs=1000`,
+`maxDelayMs=30000`, `dlqLeaseSeconds=DLQ_RETRY_LEASE_SECONDS`, `jitter=true`.
 
 ## Лицензия
 

@@ -1,6 +1,8 @@
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../database/prisma.service';
 import { JsonHelper } from '../../database/json.helper';
+import { MetricsService } from '../../metrics/metrics.service';
+import { RetryPolicyService } from '../retry/retry-policy.service';
 import { DlqService } from './dlq.service';
 
 describe('DlqService', () => {
@@ -8,18 +10,34 @@ describe('DlqService', () => {
   let prisma: {
     dlqItem: {
       create: jest.Mock;
+      findUnique: jest.Mock;
+      groupBy: jest.Mock;
       update: jest.Mock;
       updateMany: jest.Mock;
     };
   };
+  let metrics: { setDlqSize: jest.Mock };
+  let retryPolicy: { forTarget: jest.Mock };
 
   beforeEach(() => {
     prisma = {
       dlqItem: {
         create: jest.fn(),
+        findUnique: jest.fn(),
+        groupBy: jest.fn().mockResolvedValue([]),
         update: jest.fn(),
         updateMany: jest.fn(),
       },
+    };
+    metrics = { setDlqSize: jest.fn() };
+    retryPolicy = {
+      forTarget: jest.fn().mockResolvedValue({
+        maxRetries: 3,
+        baseDelayMs: 1000,
+        maxDelayMs: 30000,
+        jitter: true,
+        dlqLeaseSeconds: 120,
+      }),
     };
     service = new DlqService(
       prisma as unknown as PrismaService,
@@ -29,6 +47,8 @@ describe('DlqService', () => {
           key === 'DLQ_RETRY_LEASE_SECONDS' ? 300 : undefined,
         ),
       } as unknown as ConfigService,
+      metrics as unknown as MetricsService,
+      retryPolicy as unknown as RetryPolicyService,
     );
   });
 
@@ -52,10 +72,12 @@ describe('DlqService', () => {
   });
 
   it('claims retry lease atomically', async () => {
+    prisma.dlqItem.findUnique.mockResolvedValue({ targetSystem: 'zabbix' });
     prisma.dlqItem.updateMany.mockResolvedValue({ count: 1 });
 
     await expect(service.retry('dlq-1')).resolves.toBe(true);
 
+    expect(retryPolicy.forTarget).toHaveBeenCalledWith('zabbix');
     expect(prisma.dlqItem.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -74,6 +96,7 @@ describe('DlqService', () => {
   });
 
   it('returns false when retry lease is already claimed', async () => {
+    prisma.dlqItem.findUnique.mockResolvedValue({ targetSystem: 'zabbix' });
     prisma.dlqItem.updateMany.mockResolvedValue({ count: 0 });
 
     await expect(service.retry('dlq-1')).resolves.toBe(false);

@@ -25,6 +25,26 @@ HTTP_TLS_REJECT_UNAUTHORIZED=true
 `HTTP_TLS_CERT`, `HTTP_TLS_KEY`, `HTTP_TLS_CA` также могут содержать PEM inline
 с `\n`. Private key и PEM значения маскируются в diagnostic/log output.
 
+Admin UI auth включается отдельно от TLS:
+
+```env
+ADMIN_UI_ENABLED=true
+ADMIN_AUTH_ENABLED=true
+ADMIN_AUTH_MODE=local
+ADMIN_AUTH_LOCAL_USERNAME=admin
+ADMIN_AUTH_LOCAL_PASSWORD=secret://idmmw-admin-password
+ADMIN_AUTH_SESSION_SECRET=secret://idmmw-admin-session-secret
+ADMIN_AUTH_COOKIE_SECURE=true
+```
+
+При `HTTP_TLS_ENABLED=true` или `NODE_ENV=production` admin session cookie
+становится `Secure` по умолчанию. Для SSO используйте доверенный reverse proxy,
+который передает `ADMIN_AUTH_SSO_USER_HEADER` и
+`ADMIN_AUTH_SSO_GROUPS_HEADER`; доступ ограничивайте через
+`ADMIN_AUTH_ALLOWLIST` или `ADMIN_AUTH_ALLOWED_GROUPS`. Admin auth защищает
+`/admin/*`; IDM inbound API, `/idm/*`, `/health` и `/metrics` остаются
+доступны по своему runtime contract.
+
 ### Redis
 
 ```env

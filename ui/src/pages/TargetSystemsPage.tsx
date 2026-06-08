@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
-  fetchTargetSystems,
   createTargetSystem,
-  updateTargetSystem,
   deleteTargetSystem,
+  fetchTargetSystems,
   testTargetSystemConnection,
+  updateTargetSystem,
   type TargetSystem,
 } from '../api/client';
 
@@ -13,57 +13,240 @@ const TYPE_OPTIONS = ['zabbix', 'cmdbuild', 'rest', 'db', 'fake'];
 interface ConfigField {
   name: string;
   label: string;
+  help?: string;
+  inputType?: 'password' | 'text';
+  placeholder?: string;
 }
+
+interface RetryPolicyForm {
+  maxRetries: string;
+  baseDelayMs: string;
+  maxDelayMs: string;
+  dlqLeaseSeconds: string;
+  jitter: boolean;
+}
+
+interface TargetSystemForm {
+  id?: string;
+  name: string;
+  type: string;
+  label: string;
+  configValues: Record<string, string>;
+  retryPolicy: RetryPolicyForm;
+  extraConfig: Record<string, unknown>;
+  enabled: boolean;
+}
+
+const DEFAULT_RETRY_POLICY_FORM: RetryPolicyForm = {
+  maxRetries: '',
+  baseDelayMs: '',
+  maxDelayMs: '',
+  dlqLeaseSeconds: '',
+  jitter: true,
+};
+
+const EMPTY_FORM: TargetSystemForm = {
+  name: '',
+  type: 'zabbix',
+  label: '',
+  configValues: {},
+  retryPolicy: DEFAULT_RETRY_POLICY_FORM,
+  extraConfig: {},
+  enabled: true,
+};
 
 const TYPE_FIELDS: Record<string, ConfigField[]> = {
   zabbix: [
-    { name: 'baseUrl', label: 'Base URL' },
-    { name: 'username', label: 'Username' },
-    { name: 'code', label: 'Access code' },
-    { name: 'apiVersion', label: 'API Version (optional)' },
+    {
+      name: 'baseUrl',
+      label: 'Base URL',
+      placeholder: 'https://zabbix.example.local',
+      help: 'Zabbix API root URL.',
+    },
+    {
+      name: 'apiToken',
+      label: 'API token',
+      inputType: 'password',
+      help: 'Preferred Zabbix authentication secret. Username/password can be left empty when this is set.',
+    },
+    {
+      name: 'username',
+      label: 'Username',
+      help: 'Used with Password when API token authentication is not configured.',
+    },
+    {
+      name: 'password',
+      label: 'Password',
+      inputType: 'password',
+      help: 'Used only with Username when API token authentication is not configured.',
+    },
+    {
+      name: 'apiVersion',
+      label: 'API version',
+      placeholder: '7.0',
+      help: 'Optional operator-facing version hint.',
+    },
+    {
+      name: 'enableGroupId',
+      label: 'Enable group ID',
+      help: 'Optional group used by user.enable and user.unlock. Default is 7.',
+    },
+    {
+      name: 'disableGroupId',
+      label: 'Disable group ID',
+      help: 'Optional group used by user.disable and user.lock. Default is 9.',
+    },
   ],
   cmdbuild: [
-    { name: 'baseUrl', label: 'Base URL' },
+    {
+      name: 'baseUrl',
+      label: 'Base URL',
+      placeholder: 'https://cmdbuild.example.local',
+      help: 'CMDBuild host URL without the REST v3 path.',
+    },
+    {
+      name: 'apiPath',
+      label: 'API path',
+      placeholder: '/cmdbuild/services/rest/v3',
+      help: 'Optional REST API path. Defaults to /cmdbuild/services/rest/v3.',
+    },
     { name: 'username', label: 'Username' },
-    { name: 'code', label: 'Access code' },
-    { name: 'className', label: 'Class Name (optional)' },
+    {
+      name: 'password',
+      label: 'Password',
+      inputType: 'password',
+      help: 'Basic authentication password for CMDBuild REST v3.',
+    },
+    {
+      name: 'defaultUserGroupId',
+      label: 'Default user group ID',
+      help: 'Optional role/group assigned when user.create has no userGroups.',
+    },
   ],
-  rest: [
-    { name: 'baseUrl', label: 'Base URL (optional)' },
-  ],
+  rest: [{ name: 'baseUrl', label: 'Base URL' }],
   db: [
     { name: 'client', label: 'Dialect (pg | mysql2 | sqlite3 | oracledb)' },
-    { name: 'connection', label: 'Connection String / Oracle connectString' },
+    { name: 'connection', label: 'Connection string / Oracle connectString' },
     { name: 'username', label: 'Username (Oracle)' },
-    { name: 'password', label: 'Password (Oracle)' },
+    { name: 'password', label: 'Password (Oracle)', inputType: 'password' },
   ],
   fake: [
     { name: 'baseUrl', label: 'Base URL' },
-    { name: 'apiKey', label: 'API Key (optional)' },
-    { name: 'timeout', label: 'Timeout ms (optional)' },
+    { name: 'apiKey', label: 'API key', inputType: 'password' },
+    { name: 'timeout', label: 'Timeout ms' },
   ],
 };
 
-function parseConfig(type: string, raw: string): Record<string, unknown> {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    const cfg: Record<string, unknown> = {};
-    TYPE_FIELDS[type]?.forEach((f) => {
-      cfg[f.name] = '';
-    });
-    return cfg;
-  }
+function newForm(): TargetSystemForm {
+  return {
+    ...EMPTY_FORM,
+    configValues: {},
+    retryPolicy: { ...DEFAULT_RETRY_POLICY_FORM },
+    extraConfig: {},
+  };
 }
 
-function buildConfig(type: string, values: Record<string, string>): string {
-  const cfg: Record<string, unknown> = {};
-  TYPE_FIELDS[type]?.forEach((f) => {
-    if (values[f.name] !== undefined && values[f.name] !== '') {
-      cfg[f.name] = values[f.name];
+function positiveInteger(value: string): number | undefined {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function buildRetryPolicy(
+  form: RetryPolicyForm,
+): Record<string, unknown> | undefined {
+  const retryPolicy: Record<string, unknown> = {};
+  const numericFields: Array<keyof Omit<RetryPolicyForm, 'jitter'>> = [
+    'maxRetries',
+    'baseDelayMs',
+    'maxDelayMs',
+    'dlqLeaseSeconds',
+  ];
+
+  for (const field of numericFields) {
+    const value = positiveInteger(form[field]);
+    if (value !== undefined) {
+      retryPolicy[field] = value;
+    }
+  }
+
+  if (Object.keys(retryPolicy).length > 0 || !form.jitter) {
+    retryPolicy['jitter'] = form.jitter;
+  }
+
+  return Object.keys(retryPolicy).length > 0 ? retryPolicy : undefined;
+}
+
+function buildConfig(form: TargetSystemForm): Record<string, unknown> {
+  const cfg: Record<string, unknown> = { ...form.extraConfig };
+  TYPE_FIELDS[form.type]?.forEach((field) => {
+    const value = form.configValues[field.name];
+    if (value !== undefined && value !== '') {
+      cfg[field.name] = value;
     }
   });
-  return JSON.stringify(cfg, null, 2);
+
+  const retryPolicy = buildRetryPolicy(form.retryPolicy);
+  if (retryPolicy) {
+    cfg['retryPolicy'] = retryPolicy;
+  }
+
+  return cfg;
+}
+
+function retryPolicyFromConfig(
+  config: Record<string, unknown>,
+): RetryPolicyForm {
+  const raw = config['retryPolicy'];
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ...DEFAULT_RETRY_POLICY_FORM };
+  }
+  const retryPolicy = raw as Record<string, unknown>;
+  return {
+    maxRetries:
+      retryPolicy['maxRetries'] === undefined
+        ? ''
+        : String(retryPolicy['maxRetries']),
+    baseDelayMs:
+      retryPolicy['baseDelayMs'] === undefined
+        ? ''
+        : String(retryPolicy['baseDelayMs']),
+    maxDelayMs:
+      retryPolicy['maxDelayMs'] === undefined
+        ? ''
+        : String(retryPolicy['maxDelayMs']),
+    dlqLeaseSeconds:
+      retryPolicy['dlqLeaseSeconds'] === undefined
+        ? ''
+        : String(retryPolicy['dlqLeaseSeconds']),
+    jitter:
+      typeof retryPolicy['jitter'] === 'boolean'
+        ? retryPolicy['jitter']
+        : DEFAULT_RETRY_POLICY_FORM.jitter,
+  };
+}
+
+const SECRET_CONFIG_KEY_PATTERN = /(pass|token|secret|key|code|credential)/i;
+
+function formatExtraConfigValue(key: string, value: unknown): string {
+  if (SECRET_CONFIG_KEY_PATTERN.test(key)) {
+    return value === undefined || value === null || value === ''
+      ? ''
+      : '*** preserved ***';
+  }
+
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (value === undefined) {
+    return 'undefined';
+  }
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 export function TargetSystemsPage() {
@@ -72,22 +255,14 @@ export function TargetSystemsPage() {
   const [saving, setSaving] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [form, setForm] = useState<{
-    id?: string;
-    name: string;
-    type: string;
-    label: string;
-    configValues: Record<string, string>;
-    enabled: boolean;
-  }>({ name: '', type: 'zabbix', label: '', configValues: {}, enabled: true });
+  const [form, setForm] = useState<TargetSystemForm>(() => newForm());
   const [editing, setEditing] = useState(false);
   const [message, setMessage] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await fetchTargetSystems();
-      setItems(data);
+      setItems(await fetchTargetSystems({ limit: 200 }));
     } catch (e: unknown) {
       setMessage(`Error: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -96,11 +271,14 @@ export function TargetSystemsPage() {
   }, []);
 
   useEffect(() => {
-    load();
+    const timer = window.setTimeout(() => {
+      void load();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [load]);
 
   const resetForm = () => {
-    setForm({ name: '', type: 'zabbix', label: '', configValues: {}, enabled: true });
+    setForm(newForm());
     setEditing(false);
     setMessage('');
   };
@@ -108,7 +286,7 @@ export function TargetSystemsPage() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const config = parseConfig(form.type, buildConfig(form.type, form.configValues));
+      const config = buildConfig(form);
       if (editing && form.id) {
         await updateTargetSystem(form.id, {
           name: form.name,
@@ -138,16 +316,32 @@ export function TargetSystemsPage() {
   };
 
   const handleEdit = (item: TargetSystem) => {
-    const cfgValues: Record<string, string> = {};
-    Object.entries(item.config as Record<string, unknown>).forEach(([k, v]) => {
-      cfgValues[k] = String(v ?? '');
+    const rawConfig = item.config ?? {};
+    const fieldNames = new Set(
+      TYPE_FIELDS[item.type]?.map((f) => f.name) ?? [],
+    );
+    const configValues: Record<string, string> = {};
+    const extraConfig: Record<string, unknown> = {};
+
+    Object.entries(rawConfig).forEach(([key, value]) => {
+      if (key === 'retryPolicy') {
+        return;
+      }
+      if (fieldNames.has(key)) {
+        configValues[key] = String(value ?? '');
+      } else {
+        extraConfig[key] = value;
+      }
     });
+
     setForm({
       id: item.id,
       name: item.name,
       type: item.type,
       label: item.label,
-      configValues: cfgValues,
+      configValues,
+      retryPolicy: retryPolicyFromConfig(rawConfig),
+      extraConfig,
       enabled: item.enabled,
     });
     setEditing(true);
@@ -155,7 +349,9 @@ export function TargetSystemsPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure?')) return;
+    if (!confirm('Delete this target system?')) {
+      return;
+    }
     setDeletingId(id);
     try {
       await deleteTargetSystem(id);
@@ -181,49 +377,65 @@ export function TargetSystemsPage() {
   };
 
   const currentFields = TYPE_FIELDS[form.type] ?? [];
+  const extraConfigEntries = Object.entries(form.extraConfig);
 
   return (
-    <div style={{ padding: '1rem' }}>
-      <h1>Target Systems</h1>
-      {message && (
-        <div style={{ marginBottom: '1rem', padding: '0.5rem', background: '#eee' }}>{message}</div>
-      )}
+    <div className="page-shell">
+      <div className="page-title-row">
+        <h1>Target Systems</h1>
+        <button className="button" onClick={load} disabled={loading}>
+          {loading ? 'Loading...' : 'Refresh'}
+        </button>
+      </div>
 
-      <div style={{ marginBottom: '1rem', border: '1px solid #ccc', padding: '1rem' }}>
-        <h3>{editing ? 'Edit' : 'Create'} Target System</h3>
-        <div style={{ display: 'grid', gap: '0.5rem', maxWidth: '400px' }}>
-          <input
-            placeholder="Name"
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-          />
-          <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value, configValues: {} })}>
-            {TYPE_OPTIONS.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
-          <input
-            placeholder="Label"
-            value={form.label}
-            onChange={(e) => setForm({ ...form, label: e.target.value })}
-          />
-          {currentFields.map((f) => (
+      {message && <div className="message">{message}</div>}
+
+      <section className="panel">
+        <div className="section-title-row">
+          <h2>{editing ? 'Edit target system' : 'Create target system'}</h2>
+          {editing && (
+            <button className="button" onClick={resetForm}>
+              Cancel
+            </button>
+          )}
+        </div>
+
+        <div className="form-grid">
+          <label>
+            Name
             <input
-              key={f.name}
-              type="text"
-              placeholder={f.label}
-              value={form.configValues[f.name] ?? ''}
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+            />
+          </label>
+          <label>
+            Type
+            <select
+              value={form.type}
               onChange={(e) =>
                 setForm({
                   ...form,
-                  configValues: { ...form.configValues, [f.name]: e.target.value },
+                  type: e.target.value,
+                  configValues: {},
+                  extraConfig: {},
                 })
               }
-            />
-          ))}
+            >
+              {TYPE_OPTIONS.map((type) => (
+                <option key={type} value={type}>
+                  {type}
+                </option>
+              ))}
+            </select>
+          </label>
           <label>
+            Label
+            <input
+              value={form.label}
+              onChange={(e) => setForm({ ...form, label: e.target.value })}
+            />
+          </label>
+          <label className="checkbox-row">
             <input
               type="checkbox"
               checked={form.enabled}
@@ -231,57 +443,216 @@ export function TargetSystemsPage() {
             />
             Enabled
           </label>
-          <div>
-            <button onClick={handleSave} disabled={saving}>
-              {saving ? 'Saving...' : editing ? 'Update' : 'Create'}
-            </button>
-            {editing && (
-              <button onClick={resetForm} style={{ marginLeft: '0.5rem' }}>
-                Cancel
-              </button>
-            )}
-          </div>
         </div>
-      </div>
 
-      <button onClick={load} disabled={loading}>
-        {loading ? 'Loading...' : 'Refresh'}
-      </button>
+        <fieldset className="fieldset">
+          <legend>Connector config</legend>
+          <div className="form-grid">
+            {currentFields.map((field) => (
+              <label key={field.name}>
+                {field.label}
+                <input
+                  type={field.inputType ?? 'text'}
+                  placeholder={field.placeholder}
+                  value={form.configValues[field.name] ?? ''}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      configValues: {
+                        ...form.configValues,
+                        [field.name]: e.target.value,
+                      },
+                    })
+                  }
+                />
+                {field.help && <span className="field-help">{field.help}</span>}
+              </label>
+            ))}
+          </div>
+          {extraConfigEntries.length > 0 && (
+            <details className="config-details">
+              <summary>
+                <span>Additional config keys</span>
+                <span className="details-count">
+                  {extraConfigEntries.length}
+                </span>
+              </summary>
+              <p className="details-note">
+                Preserved in TargetSystem.config but not edited by this form.
+              </p>
+              <dl className="extra-config-list">
+                {extraConfigEntries.map(([key, value]) => {
+                  const formatted = formatExtraConfigValue(key, value);
+                  return (
+                    <div className="extra-config-row" key={key}>
+                      <dt className="mono">{key}</dt>
+                      <dd title={formatted}>{formatted}</dd>
+                    </div>
+                  );
+                })}
+              </dl>
+            </details>
+          )}
+        </fieldset>
 
-      <table style={{ width: '100%', marginTop: '1rem', borderCollapse: 'collapse' }}>
+        <fieldset className="fieldset">
+          <legend>DLQ retry policy</legend>
+          <div className="form-grid">
+            <label>
+              Max retries
+              <input
+                inputMode="numeric"
+                value={form.retryPolicy.maxRetries}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    retryPolicy: {
+                      ...form.retryPolicy,
+                      maxRetries: e.target.value,
+                    },
+                  })
+                }
+              />
+            </label>
+            <label>
+              Base delay ms
+              <input
+                inputMode="numeric"
+                value={form.retryPolicy.baseDelayMs}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    retryPolicy: {
+                      ...form.retryPolicy,
+                      baseDelayMs: e.target.value,
+                    },
+                  })
+                }
+              />
+            </label>
+            <label>
+              Max delay ms
+              <input
+                inputMode="numeric"
+                value={form.retryPolicy.maxDelayMs}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    retryPolicy: {
+                      ...form.retryPolicy,
+                      maxDelayMs: e.target.value,
+                    },
+                  })
+                }
+              />
+            </label>
+            <label>
+              DLQ lease seconds
+              <input
+                inputMode="numeric"
+                value={form.retryPolicy.dlqLeaseSeconds}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    retryPolicy: {
+                      ...form.retryPolicy,
+                      dlqLeaseSeconds: e.target.value,
+                    },
+                  })
+                }
+              />
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={form.retryPolicy.jitter}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    retryPolicy: {
+                      ...form.retryPolicy,
+                      jitter: e.target.checked,
+                    },
+                  })
+                }
+              />
+              Jitter
+            </label>
+          </div>
+        </fieldset>
+
+        <button
+          className="button primary"
+          onClick={handleSave}
+          disabled={saving}
+        >
+          {saving ? 'Saving...' : editing ? 'Update' : 'Create'}
+        </button>
+      </section>
+
+      <table className="data-table">
         <thead>
-          <tr style={{ borderBottom: '2px solid #ccc' }}>
-            <th style={{ textAlign: 'left' }}>Name</th>
-            <th style={{ textAlign: 'left' }}>Type</th>
-            <th style={{ textAlign: 'left' }}>Label</th>
-            <th style={{ textAlign: 'left' }}>Enabled</th>
+          <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Label</th>
+            <th>Enabled</th>
+            <th>Retry policy</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody>
-          {items.map((item) => (
-            <tr key={item.id} style={{ borderBottom: '1px solid #eee' }}>
-              <td>{item.name}</td>
-              <td>{item.type}</td>
-              <td>{item.label}</td>
-              <td>{item.enabled ? 'Yes' : 'No'}</td>
-              <td>
-                <button onClick={() => handleTest(item.id)} disabled={testingId === item.id}>
-                  {testingId === item.id ? 'Testing...' : 'Test'}
-                </button>
-                <button onClick={() => handleEdit(item)} style={{ marginLeft: '0.25rem' }}>
-                  Edit
-                </button>
-                <button
-                  onClick={() => handleDelete(item.id)}
-                  disabled={deletingId === item.id}
-                  style={{ marginLeft: '0.25rem' }}
-                >
-                  {deletingId === item.id ? 'Deleting...' : 'Delete'}
-                </button>
-              </td>
-            </tr>
-          ))}
+          {items.map((item) => {
+            const retryPolicy = retryPolicyFromConfig(item.config ?? {});
+            const retrySummary = [
+              retryPolicy.maxRetries ? `${retryPolicy.maxRetries} retries` : '',
+              retryPolicy.dlqLeaseSeconds
+                ? `${retryPolicy.dlqLeaseSeconds}s lease`
+                : '',
+            ]
+              .filter(Boolean)
+              .join(', ');
+
+            return (
+              <tr key={item.id}>
+                <td className="mono">{item.name}</td>
+                <td>{item.type}</td>
+                <td>{item.label}</td>
+                <td>
+                  <span
+                    className={`badge ${item.enabled ? 'resolved' : 'skipped'}`}
+                  >
+                    {item.enabled ? 'enabled' : 'disabled'}
+                  </span>
+                </td>
+                <td>{retrySummary || 'default'}</td>
+                <td>
+                  <div className="actions">
+                    <button
+                      className="button small"
+                      onClick={() => handleTest(item.id)}
+                      disabled={testingId === item.id}
+                    >
+                      {testingId === item.id ? 'Testing...' : 'Test'}
+                    </button>
+                    <button
+                      className="button small"
+                      onClick={() => handleEdit(item)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className="button danger small"
+                      onClick={() => handleDelete(item.id)}
+                      disabled={deletingId === item.id}
+                    >
+                      {deletingId === item.id ? 'Deleting...' : 'Delete'}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

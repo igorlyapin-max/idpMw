@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ProcessingService } from './processing.service';
 import { ConnectorRegistry } from '../connectors/connector.registry';
 import { RetryService } from './retry/retry.service';
+import { RetryPolicyService } from './retry/retry-policy.service';
 import { DlqService } from './dlq/dlq.service';
 import { MetricsService } from '../metrics/metrics.service';
 
@@ -9,12 +10,22 @@ describe('ProcessingService', () => {
   let service: ProcessingService;
   let registry: { get: jest.Mock };
   let retry: { execute: jest.Mock };
+  let retryPolicy: { forTarget: jest.Mock };
   let dlq: { add: jest.Mock };
   let metrics: { recordEvent: jest.Mock; recordConnectorError: jest.Mock };
 
   beforeEach(async () => {
     registry = { get: jest.fn() };
     retry = { execute: jest.fn() };
+    retryPolicy = {
+      forTarget: jest.fn().mockResolvedValue({
+        maxRetries: 3,
+        baseDelayMs: 1000,
+        maxDelayMs: 30000,
+        jitter: true,
+        dlqLeaseSeconds: 300,
+      }),
+    };
     dlq = { add: jest.fn() };
     metrics = { recordEvent: jest.fn(), recordConnectorError: jest.fn() };
 
@@ -23,6 +34,7 @@ describe('ProcessingService', () => {
         ProcessingService,
         { provide: ConnectorRegistry, useValue: registry },
         { provide: RetryService, useValue: retry },
+        { provide: RetryPolicyService, useValue: retryPolicy },
         { provide: DlqService, useValue: dlq },
         { provide: MetricsService, useValue: metrics },
       ],
@@ -47,7 +59,8 @@ describe('ProcessingService', () => {
       payload: {},
     });
 
-    expect(metrics.recordEvent).toHaveBeenCalledWith('success');
+    expect(retryPolicy.forTarget).toHaveBeenCalledWith('zabbix');
+    expect(metrics.recordEvent).toHaveBeenCalledWith('success', 'zabbix');
   });
 
   it('should throw when connector not found', async () => {
@@ -111,11 +124,12 @@ describe('ProcessingService', () => {
       }),
     ).rejects.toThrow('boom');
 
-    expect(metrics.recordEvent).toHaveBeenCalledWith('failed');
+    expect(metrics.recordEvent).toHaveBeenCalledWith('failed', 'zabbix');
     expect(dlq.add).toHaveBeenCalledWith(
       expect.objectContaining({
         eventId: 'e1',
         error: 'boom',
+        retryCount: 3,
       }),
     );
   });
@@ -140,7 +154,7 @@ describe('ProcessingService', () => {
       success: true,
       data: { id: 'user-1', username: 'jdoe' },
     });
-    expect(metrics.recordEvent).toHaveBeenCalledWith('success');
+    expect(metrics.recordEvent).toHaveBeenCalledWith('success', 'fake');
     expect(dlq.add).not.toHaveBeenCalled();
   });
 });

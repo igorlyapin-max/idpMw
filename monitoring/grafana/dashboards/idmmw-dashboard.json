@@ -48,7 +48,7 @@
         "targets": [
           {
             "expr": "rate(idmmw_events_processed_total[1m])",
-            "legendFormat": "{{status}}"
+            "legendFormat": "{{targetSystem}} {{status}}"
           }
         ],
         "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 }
@@ -64,6 +64,18 @@
           }
         ],
         "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 }
+      },
+      {
+        "id": 6,
+        "title": "Processed Last 5 Minutes",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "idmmw_events_processed_last_5m",
+            "legendFormat": "{{targetSystem}} {{status}}"
+          }
+        ],
+        "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 }
       }
     ]
   }

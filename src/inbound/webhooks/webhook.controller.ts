@@ -7,7 +7,15 @@ import {
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
-import { IsIn, IsString, IsObject } from 'class-validator';
+import {
+  IsIn,
+  IsString,
+  IsObject,
+  Matches,
+  Validate,
+  ValidatorConstraint,
+  ValidatorConstraintInterface,
+} from 'class-validator';
 import { WebhookService } from './webhook.service';
 import { AuditInterceptor } from '../../core/audit/audit.interceptor';
 import {
@@ -15,6 +23,28 @@ import {
   isReadOperation,
 } from './avanpost-operation.enum';
 import { DiagnosticLoggerService } from '../../diagnostics/diagnostic-logger.service';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+@ValidatorConstraint({ name: 'avanpostPayloadShape', async: false })
+class AvanpostPayloadShapeConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    if (!isRecord(value)) {
+      return false;
+    }
+
+    return ['data', 'params', 'metadata'].every((key) => {
+      const section = value[key];
+      return section === undefined || isRecord(section);
+    });
+  }
+
+  defaultMessage(): string {
+    return 'payload.data, payload.params and payload.metadata must be objects when provided';
+  }
+}
 
 /**
  * Payload from Avanpost IDM (or any compatible IDM system).
@@ -47,9 +77,11 @@ import { DiagnosticLoggerService } from '../../diagnostics/diagnostic-logger.ser
 export class AvanpostWebhookDto {
   /** Unique event identifier — used for idempotency/deduplication */
   @IsString()
+  @Matches(/\S/, { message: 'eventId must not be empty' })
   eventId: string;
 
-  /** Operation name — must be one of the supported Avanpost IDM operations. */
+  /** Operation name — must be one of the idmMw Avanpost-compatible operations. */
+  @IsString()
   @IsIn(AVANPOST_OPERATION_VALUES)
   operation: string;
 
@@ -59,10 +91,17 @@ export class AvanpostWebhookDto {
    * In legacy mode this is the static connector type ('rest', 'db', ...).
    */
   @IsString()
+  @Matches(/\S/, { message: 'targetSystem must not be empty' })
   targetSystem: string;
 
-  /** Free-form payload — forwarded to the connector inside payload.data */
+  /**
+   * Avanpost-compatible payload zones:
+   * - payload.data: mutable write data
+   * - payload.params: read/test identifiers and filters
+   * - payload.metadata: optional IDM process context
+   */
   @IsObject()
+  @Validate(AvanpostPayloadShapeConstraint)
   payload: Record<string, unknown>;
 }
 

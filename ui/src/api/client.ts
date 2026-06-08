@@ -1,15 +1,114 @@
 import axios from 'axios';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3010';
+const API_URL = import.meta.env.VITE_API_URL || '';
 const API_KEY = import.meta.env.VITE_API_KEY || '';
+
+let csrfToken = '';
 
 export const apiClient = axios.create({
   baseURL: API_URL,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
     ...(API_KEY ? { 'X-API-Key': API_KEY } : {}),
   },
 });
+
+apiClient.interceptors.request.use((config) => {
+  if (csrfToken && config.method && config.method.toUpperCase() !== 'GET') {
+    config.headers['X-CSRF-Token'] = csrfToken;
+  }
+  return config;
+});
+
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error: unknown) => {
+    const message = formatAxiosError(error);
+    return Promise.reject(message ? new Error(message) : error);
+  },
+);
+
+function formatAxiosError(error: unknown): string | null {
+  if (!axios.isAxiosError(error)) {
+    return null;
+  }
+
+  const status = error.response?.status;
+  const message = extractResponseMessage(error.response?.data) ?? error.message;
+  return status ? `${status}: ${message}` : message;
+}
+
+function extractResponseMessage(data: unknown): string | null {
+  if (typeof data === 'string' && data.trim()) {
+    return data;
+  }
+
+  if (typeof data !== 'object' || data === null) {
+    return null;
+  }
+
+  const payload = data as Record<string, unknown>;
+  const message = payload['message'];
+  if (typeof message === 'string' && message.trim()) {
+    return message;
+  }
+  if (Array.isArray(message) && message.length > 0) {
+    return message.map(String).join('; ');
+  }
+
+  const error = payload['error'];
+  if (typeof error === 'string' && error.trim()) {
+    return error;
+  }
+
+  return null;
+}
+
+export function setCsrfToken(value: string): void {
+  csrfToken = value;
+}
+
+export interface AuthSession {
+  authEnabled: boolean;
+  authenticated: boolean;
+  mode: string;
+  csrfToken?: string;
+  user?: {
+    sub: string;
+    name: string;
+    provider: string;
+  };
+}
+
+export async function fetchAuthSession(): Promise<AuthSession> {
+  const res = await apiClient.get('/auth/session');
+  const session = res.data as AuthSession;
+  setCsrfToken(session.csrfToken ?? '');
+  return session;
+}
+
+export async function loginLocal(
+  username: string,
+  password: string,
+): Promise<AuthSession> {
+  const res = await apiClient.post('/auth/login', { username, password });
+  const session = res.data as AuthSession;
+  setCsrfToken(session.csrfToken ?? '');
+  return session;
+}
+
+export async function loginSso(): Promise<AuthSession> {
+  const res = await apiClient.post('/auth/sso-login');
+  const session = res.data as AuthSession;
+  setCsrfToken(session.csrfToken ?? '');
+  return session;
+}
+
+export async function logout(): Promise<void> {
+  await apiClient.post('/auth/logout');
+  setCsrfToken('');
+}
 
 export interface DlqItem {
   id: string;
@@ -26,6 +125,7 @@ export interface DlqItem {
 
 export async function fetchDlqItems(params?: {
   status?: string;
+  targetSystem?: string;
   limit?: number;
   offset?: number;
 }): Promise<DlqItem[]> {
@@ -37,8 +137,46 @@ export async function retryDlqItem(id: string): Promise<void> {
   await apiClient.post(`/admin/dlq/${id}/retry`);
 }
 
+export async function retryDlqItems(data: {
+  targetSystem?: string;
+  status?: string;
+  limit?: number;
+}): Promise<{
+  requested: number;
+  queued: number;
+  skipped: number;
+  errors: Array<{ id: string; error: string }>;
+}> {
+  const res = await apiClient.post('/admin/dlq/retry', data);
+  return res.data as {
+    requested: number;
+    queued: number;
+    skipped: number;
+    errors: Array<{ id: string; error: string }>;
+  };
+}
+
 export async function skipDlqItem(id: string): Promise<void> {
   await apiClient.post(`/admin/dlq/${id}/skip`);
+}
+
+export interface AdminStats {
+  dlq: Record<string, number>;
+  processedLast5Minutes: {
+    total: number;
+    byStatus: Record<string, number>;
+    byTargetSystem: Record<string, Record<string, number>>;
+  };
+  infrastructure: {
+    kafkaEnabled: boolean;
+    redisEnabled: boolean;
+    processingMode: string;
+  };
+}
+
+export async function fetchAdminStats(): Promise<AdminStats> {
+  const res = await apiClient.get('/admin/stats');
+  return res.data as AdminStats;
 }
 
 export interface TargetSystem {

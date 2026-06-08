@@ -33,8 +33,17 @@ function getOrCreateGauge(
   return existing ?? new Gauge({ name, help, labelNames });
 }
 
+interface ProcessedEventSample {
+  timestamp: number;
+  status: 'success' | 'failed';
+  targetSystem: string;
+}
+
 @Injectable()
 export class MetricsService {
+  private readonly processedWindow: ProcessedEventSample[] = [];
+  private readonly windowMs = 5 * 60 * 1000;
+
   readonly httpRequestsTotal = getOrCreateCounter(
     'idmmw_http_requests_total',
     'Total HTTP requests',
@@ -63,7 +72,13 @@ export class MetricsService {
   readonly eventsProcessed = getOrCreateCounter(
     'idmmw_events_processed_total',
     'Total events processed',
-    ['status'],
+    ['status', 'targetSystem'],
+  );
+
+  readonly eventsProcessedLast5m = getOrCreateGauge(
+    'idmmw_events_processed_last_5m',
+    'Events processed during the last five minutes',
+    ['status', 'targetSystem'],
   );
 
   recordConnectorError(connector: string, operation: string): void {
@@ -74,7 +89,63 @@ export class MetricsService {
     this.dlqSize.set({ status }, count);
   }
 
-  recordEvent(status: 'success' | 'failed'): void {
-    this.eventsProcessed.inc({ status });
+  recordEvent(status: 'success' | 'failed', targetSystem = 'unknown'): void {
+    this.eventsProcessed.inc({ status, targetSystem });
+    this.processedWindow.push({
+      timestamp: Date.now(),
+      status,
+      targetSystem,
+    });
+    this.refreshProcessedWindow();
+  }
+
+  processedLast5Minutes(): {
+    total: number;
+    byStatus: Record<string, number>;
+    byTargetSystem: Record<string, Record<string, number>>;
+  } {
+    this.refreshProcessedWindow();
+    const byStatus: Record<string, number> = {};
+    const byTargetSystem: Record<string, Record<string, number>> = {};
+    for (const sample of this.processedWindow) {
+      byStatus[sample.status] = (byStatus[sample.status] ?? 0) + 1;
+      byTargetSystem[sample.targetSystem] ??= {};
+      byTargetSystem[sample.targetSystem][sample.status] =
+        (byTargetSystem[sample.targetSystem][sample.status] ?? 0) + 1;
+    }
+    return {
+      total: this.processedWindow.length,
+      byStatus,
+      byTargetSystem,
+    };
+  }
+
+  private refreshProcessedWindow(): void {
+    const cutoff = Date.now() - this.windowMs;
+    while (
+      this.processedWindow.length > 0 &&
+      this.processedWindow[0].timestamp < cutoff
+    ) {
+      this.processedWindow.shift();
+    }
+
+    this.eventsProcessedLast5m.reset();
+    for (const [targetSystem, byStatus] of Object.entries(
+      this.processedLast5MinutesRaw(),
+    )) {
+      for (const [status, count] of Object.entries(byStatus)) {
+        this.eventsProcessedLast5m.set({ status, targetSystem }, count);
+      }
+    }
+  }
+
+  private processedLast5MinutesRaw(): Record<string, Record<string, number>> {
+    const result: Record<string, Record<string, number>> = {};
+    for (const sample of this.processedWindow) {
+      result[sample.targetSystem] ??= {};
+      result[sample.targetSystem][sample.status] =
+        (result[sample.targetSystem][sample.status] ?? 0) + 1;
+    }
+    return result;
   }
 }

@@ -13,6 +13,8 @@ type MockConnector = {
   execute: jest.Mock;
   testConnection: jest.Mock;
   getCapabilities?: jest.Mock;
+  getSchema?: jest.Mock;
+  sync?: jest.Mock;
 };
 
 describe('ConnectorRegistry', () => {
@@ -124,6 +126,63 @@ describe('ConnectorRegistry', () => {
       await registry.reload();
 
       expect(registry.get('z1')?.getCapabilities?.()).toEqual(capabilities);
+    });
+
+    it('should expose schema and sync handlers through dynamic proxies with config', async () => {
+      zabbixConnector.getSchema = jest.fn().mockResolvedValue({
+        success: true,
+        data: { objectClasses: [] },
+      });
+      zabbixConnector.sync = jest.fn().mockResolvedValue({
+        success: true,
+        data: { mode: 'incremental' },
+      });
+      prisma.targetSystem.findMany.mockResolvedValue([
+        {
+          id: '1',
+          name: 'z1',
+          type: 'zabbix',
+          enabled: true,
+          config: { baseUrl: 'http://z', apiToken: 'secret' },
+        },
+      ]);
+
+      await registry.reload();
+
+      const proxy = registry.get('z1');
+      await proxy?.getSchema?.({
+        operation: 'schema.get',
+        targetSystem: 'z1',
+        payload: { params: {} },
+      });
+      await proxy?.sync?.(
+        {
+          operation: 'sync.incremental',
+          targetSystem: 'z1',
+          payload: { params: {} },
+        },
+        'incremental',
+      );
+
+      expect(zabbixConnector.getSchema).toHaveBeenCalledWith({
+        operation: 'schema.get',
+        targetSystem: 'z1',
+        payload: {
+          params: {},
+          config: { baseUrl: 'http://z', apiToken: 'secret' },
+        },
+      });
+      expect(zabbixConnector.sync).toHaveBeenCalledWith(
+        {
+          operation: 'sync.incremental',
+          targetSystem: 'z1',
+          payload: {
+            params: {},
+            config: { baseUrl: 'http://z', apiToken: 'secret' },
+          },
+        },
+        'incremental',
+      );
     });
   });
 

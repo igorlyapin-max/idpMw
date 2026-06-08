@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConnectorRegistry } from '../connectors/connector.registry';
 import { RetryService } from './retry/retry.service';
+import { RetryPolicyService } from './retry/retry-policy.service';
 import { DlqService } from './dlq/dlq.service';
 import { MetricsService } from '../metrics/metrics.service';
 import type { ConnectorResult } from '../connectors/connector.interface';
@@ -44,6 +45,7 @@ export class ProcessingService {
   constructor(
     private readonly registry: ConnectorRegistry,
     private readonly retry: RetryService,
+    private readonly retryPolicy: RetryPolicyService,
     private readonly dlq: DlqService,
     private readonly metrics: MetricsService,
   ) {}
@@ -57,6 +59,7 @@ export class ProcessingService {
       throw new Error(`Unsupported target system: ${dto.targetSystem}`);
     }
 
+    const retryPolicy = await this.retryPolicy.forTarget(dto.targetSystem);
     try {
       const result = await this.retry.execute(
         () =>
@@ -65,18 +68,18 @@ export class ProcessingService {
             targetSystem: dto.targetSystem,
             payload: dto.payload,
           }),
-        { maxRetries: 3, baseDelayMs: 1000 },
+        retryPolicy,
       );
       if (!result.success) {
         this.metrics.recordConnectorError(dto.targetSystem, dto.operation);
         throw new Error(result.error ?? 'Connector returned failure');
       }
       this.logger.log(`Processing succeeded for event ${dto.eventId}`);
-      this.metrics.recordEvent('success');
+      this.metrics.recordEvent('success', dto.targetSystem);
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.error(`Processing failed for event ${dto.eventId}: ${msg}`);
-      this.metrics.recordEvent('failed');
+      this.metrics.recordEvent('failed', dto.targetSystem);
 
       await this.dlq.add({
         eventId: dto.eventId,
@@ -84,7 +87,7 @@ export class ProcessingService {
         targetSystem: dto.targetSystem,
         payload: dto.payload,
         error: msg,
-        retryCount: 3,
+        retryCount: retryPolicy.maxRetries,
       });
       throw error;
     }
@@ -114,7 +117,7 @@ export class ProcessingService {
           targetSystem: dto.targetSystem,
           payload: dto.payload,
         });
-        this.metrics.recordEvent('success');
+        this.metrics.recordEvent('success', dto.targetSystem);
         return result;
       }
 
@@ -131,7 +134,7 @@ export class ProcessingService {
           },
           dto.operation === 'sync.incremental' ? 'incremental' : 'full',
         );
-        this.metrics.recordEvent('success');
+        this.metrics.recordEvent('success', dto.targetSystem);
         return result;
       }
 
@@ -147,14 +150,14 @@ export class ProcessingService {
       }
 
       this.logger.log(`Read processing succeeded for event ${dto.eventId}`);
-      this.metrics.recordEvent('success');
+      this.metrics.recordEvent('success', dto.targetSystem);
       return result;
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.error(
         `Read processing failed for event ${dto.eventId}: ${msg}`,
       );
-      this.metrics.recordEvent('failed');
+      this.metrics.recordEvent('failed', dto.targetSystem);
       throw error;
     }
   }

@@ -57,7 +57,7 @@ import { JsonHelper } from '../database/json.helper';
  *  Example
  *  -------
  *  DB row: { name: 'zabbix-prod', type: 'zabbix',
- *            config: { baseUrl: 'http://z.prod', username: 'u', code: '***' } }
+ *            config: { baseUrl: 'http://z.prod', apiToken: '***' } }
  *
  *  Webhook: { targetSystem: 'zabbix-prod', operation: 'host.create', payload: { data: {} } }
  *
@@ -67,7 +67,7 @@ import { JsonHelper } from '../database/json.helper';
  *      targetSystem: 'zabbix-prod',
  *      payload: {
  *        data: {},
- *        config: { baseUrl: 'http://z.prod', username: 'u', code: '***' }
+ *        config: { baseUrl: 'http://z.prod', apiToken: '***' }
  *      }
  *    })
  *
@@ -217,6 +217,38 @@ export class ConnectorRegistry implements OnModuleInit {
 
     if (baseConnector.getCapabilities) {
       proxy.getCapabilities = () => baseConnector.getCapabilities!();
+    }
+
+    if (baseConnector.getSchema) {
+      proxy.getSchema = async (
+        payload: ConnectorPayload,
+      ): Promise<ConnectorResult> => {
+        return baseConnector.getSchema!({
+          ...payload,
+          payload: {
+            ...payload.payload,
+            config,
+          },
+        });
+      };
+    }
+
+    if (baseConnector.sync) {
+      proxy.sync = async (
+        payload: ConnectorPayload,
+        mode: string,
+      ): Promise<ConnectorResult> => {
+        return baseConnector.sync!(
+          {
+            ...payload,
+            payload: {
+              ...payload.payload,
+              config,
+            },
+          },
+          mode,
+        );
+      };
     }
 
     return proxy;

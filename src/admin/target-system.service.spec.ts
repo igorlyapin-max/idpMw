@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { TargetSystemService } from './target-system.service';
 import { PrismaService } from '../database/prisma.service';
 import { JsonHelper } from '../database/json.helper';
@@ -95,6 +96,18 @@ describe('TargetSystemService', () => {
       });
       expect(jsonHelper.toJson).toHaveBeenCalledWith({ url: 'http://z' });
     });
+
+    it('should map duplicate names to conflict', async () => {
+      prisma.targetSystem.create.mockRejectedValue({ code: 'P2002' });
+      await expect(
+        service.create({
+          name: 'z1',
+          type: 'zabbix',
+          label: 'Zabbix',
+          config: {},
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
   });
 
   describe('update', () => {
@@ -102,6 +115,29 @@ describe('TargetSystemService', () => {
       prisma.targetSystem.update.mockResolvedValue({ id: '1' });
       await service.update('1', { config: { url: 'http://z' } });
       expect(jsonHelper.toJson).toHaveBeenCalledWith({ url: 'http://z' });
+    });
+
+    it('should map duplicate names to conflict', async () => {
+      prisma.targetSystem.update.mockRejectedValue({ code: 'P2002' });
+      await expect(service.update('1', { name: 'z1' })).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+    });
+
+    it('should map missing target systems to not found', async () => {
+      prisma.targetSystem.update.mockRejectedValue({ code: 'P2025' });
+      await expect(
+        service.update('missing', { label: 'Z' }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('delete', () => {
+    it('should map missing target systems to not found', async () => {
+      prisma.targetSystem.delete.mockRejectedValue({ code: 'P2025' });
+      await expect(service.delete('missing')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 

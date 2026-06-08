@@ -5,6 +5,7 @@ import { IdempotencyService } from './idempotency/idempotency.service';
 import { RedisIdempotencyStore } from './idempotency/stores/redis-idempotency.store';
 import { PgIdempotencyStore } from './idempotency/stores/pg-idempotency.store';
 import { RetryService } from './retry/retry.service';
+import { RetryPolicyService } from './retry/retry-policy.service';
 import { DlqService } from './dlq/dlq.service';
 import { AuditInterceptor } from './audit/audit.interceptor';
 import { ProcessingService } from './processing.service';
@@ -16,6 +17,7 @@ import { ProcessingService } from './processing.service';
     RedisIdempotencyStore,
     PgIdempotencyStore,
     RetryService,
+    RetryPolicyService,
     DlqService,
     AuditInterceptor,
     ProcessingService,
@@ -23,6 +25,7 @@ import { ProcessingService } from './processing.service';
   exports: [
     IdempotencyService,
     RetryService,
+    RetryPolicyService,
     DlqService,
     AuditInterceptor,
     ProcessingService,
