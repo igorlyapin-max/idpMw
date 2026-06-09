@@ -1,0 +1,18 @@
+services:
+  idmmw:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        PRISMA_SCHEMA: prisma/schema.sqlite.prisma
+    image: ${IDMMW_IMAGE:-idmmw:sqlite-test}
+    env_file:
+      - ./profiles/sqlite-test.env.example
+    ports:
+      - '${IDMMW_PORT:-3010}:3010'
+    volumes:
+      - idmmw_sqlite_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  idmmw_sqlite_data:

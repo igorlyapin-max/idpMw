@@ -1,0 +1,124 @@
+image: node:22-bookworm
+
+stages:
+  - validate
+  - test
+  - frontend
+  - profile
+  - smoke
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
+variables:
+  DATABASE_URL: 'postgresql://idmmw:idmmw@localhost:5432/idmmw'
+  DATABASE_PROVIDER: 'postgresql'
+  LIGHTWEIGHT_MODE: 'true'
+  NPM_CONFIG_AUDIT: 'false'
+  NPM_CONFIG_FUND: 'false'
+
+cache:
+  key:
+    files:
+      - package-lock.json
+      - ui/package-lock.json
+      - idm-emulator/package-lock.json
+  paths:
+    - .npm/
+    - ui/.npm/
+    - idm-emulator/.npm/
+  policy: pull-push
+
+.backend_job:
+  before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends ca-certificates curl
+    - rm -rf /var/lib/apt/lists/*
+    - node --version
+    - npm --version
+    - npm ci --cache .npm --prefer-offline
+
+backend:validate:
+  extends: .backend_job
+  stage: validate
+  script:
+    - DATABASE_URL="postgresql://idmmw:idmmw@localhost:5432/idmmw" npx prisma validate --schema=prisma/schema.prisma
+    - DATABASE_URL="file:/tmp/idmmw-ci-validate.db" npx prisma validate --schema=prisma/schema.sqlite.prisma
+    - DATABASE_URL="postgresql://root@localhost:26257/defaultdb?sslmode=disable" npx prisma validate --schema=prisma/schema.cockroach.prisma
+    - DATABASE_URL="postgresql://idmmw:idmmw@localhost:5432/idmmw" npx prisma generate --schema=prisma/schema.prisma
+    - npm run build
+    - ./node_modules/.bin/eslint "src/**/*.ts"
+
+backend:unit:
+  extends: .backend_job
+  stage: test
+  script:
+    - DATABASE_URL="postgresql://idmmw:idmmw@localhost:5432/idmmw" npx prisma generate --schema=prisma/schema.prisma
+    - npm test -- --runInBand
+
+backend:e2e:sqlite:
+  extends: .backend_job
+  stage: test
+  script:
+    - npm run test:e2e:sqlite -- --forceExit
+
+frontend:admin-ui:
+  stage: frontend
+  before_script:
+    - node --version
+    - npm --version
+    - cd ui
+    - npm ci --cache .npm --prefer-offline
+  script:
+    - npm run lint
+    - npm run build
+
+frontend:idm-emulator:
+  stage: frontend
+  before_script:
+    - node --version
+    - npm --version
+    - cd idm-emulator
+    - npm ci --cache .npm --prefer-offline
+  script:
+    - npm run lint
+    - npm run build
+
+profile:sqlite-test:smoke:
+  extends: .backend_job
+  stage: profile
+  script:
+    - npm run profile:smoke:sqlite
+
+profile:prod-ha:yugabyte:validate:
+  extends: .backend_job
+  stage: profile
+  script:
+    - npm run profile:validate -- prod-ha-yugabyte
+    - npm run profile:validate:prod-ha -- yugabyte
+
+profile:prod-ha:cockroach:validate:
+  extends: .backend_job
+  stage: profile
+  script:
+    - npm run profile:validate -- prod-ha-cockroach
+    - npm run profile:validate:prod-ha -- cockroach
+
+profile:prod-ha:live:
+  extends: .backend_job
+  stage: smoke
+  rules:
+    - if: '$IDMMW_RUN_LIVE_HA_SMOKE == "true"'
+      when: manual
+      allow_failure: true
+    - when: never
+  script:
+    - npm run test:ha-live
+
+runtime:smoke:
+  extends: .backend_job
+  stage: smoke
+  script:
+    - npm run test:runtime-smoke

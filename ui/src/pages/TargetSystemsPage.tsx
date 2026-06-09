@@ -8,7 +8,7 @@ import {
   type TargetSystem,
 } from '../api/client';
 
-const TYPE_OPTIONS = ['zabbix', 'cmdbuild', 'rest', 'db', 'fake'];
+const TYPE_OPTIONS = ['zabbix', 'cmdbuild', 'passwork', 'rest', 'db', 'fake'];
 
 interface ConfigField {
   name: string;
@@ -121,6 +121,37 @@ const TYPE_FIELDS: Record<string, ConfigField[]> = {
       name: 'defaultUserGroupId',
       label: 'Default user group ID',
       help: 'Optional role/group assigned when user.create has no userGroups.',
+    },
+  ],
+  passwork: [
+    {
+      name: 'baseUrl',
+      label: 'Base URL',
+      placeholder: 'https://passwork.example.local',
+      help: 'Passwork host URL without /api/v1.',
+    },
+    {
+      name: 'accessToken',
+      label: 'Access token',
+      inputType: 'password',
+      help: 'Bearer accessToken generated in Passwork API tokens.',
+    },
+    {
+      name: 'masterKeyHash',
+      label: 'Master key hash',
+      inputType: 'password',
+      help: 'Optional Passwork-MasterKeyHash header for client-side encryption mode. Secret values are not decrypted by idmMw.',
+    },
+    {
+      name: 'timeout',
+      label: 'Timeout ms',
+      help: 'Optional request timeout. Default is 30000.',
+    },
+    {
+      name: 'responseFormat',
+      label: 'Response format',
+      placeholder: 'raw',
+      help: 'Passwork X-Response-Format header. Default is raw.',
     },
   ],
   rest: [{ name: 'baseUrl', label: 'Base URL' }],

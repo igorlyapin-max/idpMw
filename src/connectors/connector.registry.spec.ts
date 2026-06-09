@@ -7,6 +7,7 @@ import { DbConnectorService } from './implementations/db-connector/db-connector.
 import { ZabbixConnectorService } from './implementations/zabbix-connector/zabbix-connector.service';
 import { CmdbuildConnectorService } from './implementations/cmdbuild-connector/cmdbuild-connector.service';
 import { FakeConnectorService } from './implementations/fake-connector/fake-connector.service';
+import { PassworkConnectorService } from './implementations/passwork-connector/passwork-connector.service';
 
 type MockConnector = {
   name: string;
@@ -25,6 +26,7 @@ describe('ConnectorRegistry', () => {
   let zabbixConnector: MockConnector;
   let cmdbuildConnector: MockConnector;
   let fakeConnector: MockConnector;
+  let passworkConnector: MockConnector;
 
   beforeEach(async () => {
     prisma = { targetSystem: { findMany: jest.fn() } };
@@ -50,6 +52,12 @@ describe('ConnectorRegistry', () => {
       execute: jest.fn(),
       testConnection: jest.fn(),
     };
+    passworkConnector = {
+      name: 'passwork',
+      execute: jest.fn(),
+      testConnection: jest.fn(),
+      getCapabilities: jest.fn(),
+    };
     const jsonHelper = {
       fromJson: jest.fn((v: unknown) =>
         typeof v === 'string' ? (JSON.parse(v) as Record<string, unknown>) : v,
@@ -67,6 +75,7 @@ describe('ConnectorRegistry', () => {
         { provide: ZabbixConnectorService, useValue: zabbixConnector },
         { provide: CmdbuildConnectorService, useValue: cmdbuildConnector },
         { provide: FakeConnectorService, useValue: fakeConnector },
+        { provide: PassworkConnectorService, useValue: passworkConnector },
       ],
     }).compile();
 
@@ -87,6 +96,7 @@ describe('ConnectorRegistry', () => {
       await registry.reload();
       expect(registry.get('zabbix')).toBeDefined();
       expect(registry.get('fake')).toBeDefined();
+      expect(registry.get('passwork')).toBeDefined();
       expect(registry.get('z1')).toBeDefined();
     });
 
@@ -126,6 +136,40 @@ describe('ConnectorRegistry', () => {
       await registry.reload();
 
       expect(registry.get('z1')?.getCapabilities?.()).toEqual(capabilities);
+    });
+
+    it('should register Passwork dynamic target systems', async () => {
+      prisma.targetSystem.findMany.mockResolvedValue([
+        {
+          id: '1',
+          name: 'passwork-prod',
+          type: 'passwork',
+          enabled: true,
+          config: { baseUrl: 'https://passwork.local', accessToken: 'secret' },
+        },
+      ]);
+      passworkConnector.execute.mockResolvedValue({
+        success: true,
+        data: { id: 'u1' },
+      });
+
+      await registry.reload();
+      const proxy = registry.get('passwork-prod');
+      const result = await proxy?.execute({
+        operation: 'user.get',
+        targetSystem: 'passwork-prod',
+        payload: { params: { id: 'u1' } },
+      });
+
+      expect(result).toEqual({ success: true, data: { id: 'u1' } });
+      expect(passworkConnector.execute).toHaveBeenCalledWith({
+        operation: 'user.get',
+        targetSystem: 'passwork-prod',
+        payload: {
+          params: { id: 'u1' },
+          config: { baseUrl: 'https://passwork.local', accessToken: 'secret' },
+        },
+      });
     });
 
     it('should expose schema and sync handlers through dynamic proxies with config', async () => {

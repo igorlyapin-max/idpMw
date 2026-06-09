@@ -91,15 +91,58 @@ curl -X POST http://localhost:3010/admin/target-systems \
   }'
 ```
 
+Passwork example:
+
+```bash
+curl -X POST http://localhost:3010/admin/target-systems \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "passwork-prod",
+    "type": "passwork",
+    "label": "Passwork Production",
+    "config": {
+      "baseUrl": "https://passwork.example.local",
+      "accessToken": "REPLACE_WITH_SECRET",
+      "responseFormat": "raw",
+      "timeout": 30000,
+      "retryPolicy": {
+        "maxRetries": 5,
+        "baseDelayMs": 1000,
+        "maxDelayMs": 30000,
+        "dlqLeaseSeconds": 600,
+        "jitter": true
+      },
+      "tls": {
+        "enabled": true,
+        "caPath": "/etc/idmmw/tls/passwork-ca.crt",
+        "serverName": "passwork.example.local",
+        "rejectUnauthorized": true
+      }
+    },
+    "enabled": true
+  }'
+```
+
 Правила:
 
 - `name` - стабильный routing key для IDM; именно это значение указывается в
   `targetSystem`.
-- `type` - тип коннектора (`zabbix`, `cmdbuild`, `rest`, `db`, `fake` или
+- `type` - тип коннектора (`zabbix`, `cmdbuild`, `passwork`, `rest`, `db`,
+  `fake` или
   другой зарегистрированный connector type).
 - `config` хранит параметры конкретного инстанса целевой системы.
 - После create/update/delete idmMw автоматически перезагружает registry;
   перезапуск приложения для изменения `TargetSystem.config` не нужен.
+
+Для Passwork connector v1 управляет пользователями и группами через HTTP API
+Passwork: `/api/v1/users`, `/api/v1/user-groups`,
+`/api/v1/sessions/current/info`. Он не читает, не расшифровывает и не изменяет
+password/vault item secrets. Если в Passwork включено клиентское шифрование и
+ваш API flow требует `Passwork-MasterKeyHash`, добавьте
+`config.masterKeyHash`; значение маскируется в логах так же, как token/key.
+Endpoint groups сверены с официальной документацией Passwork API:
+<https://passwork.ru/docs/llm/api-and-integrations/intro.mdx>. Полная схема
+конкретной инсталляции Passwork доступна в поставляемом `Api reference.pdf`.
 
 Если `ADMIN_AUTH_ENABLED=true`, все `/admin/*` endpoints требуют admin session.
 State-changing запросы (`POST`, `PATCH`, `DELETE`) должны передавать
@@ -475,6 +518,61 @@ curl -s -X POST http://localhost:3010/idm/zabbix-prod/sync \
   -H "Content-Type: application/json" \
   -d '{"mode":"incremental"}' | jq .
 ```
+
+Passwork user create:
+
+```json
+{
+  "eventId": "idm-1001:passwork-prod",
+  "operation": "user.create",
+  "targetSystem": "passwork-prod",
+  "payload": {
+    "data": {
+      "username": "ivanov",
+      "email": "ivanov@example.local",
+      "name": "Ivan Ivanov",
+      "roleId": "user-role-id"
+    }
+  }
+}
+```
+
+Passwork user search/resolve uses `payload.params`:
+
+```json
+{
+  "eventId": "idm-read-1001:passwork-prod",
+  "operation": "user.search",
+  "targetSystem": "passwork-prod",
+  "payload": {
+    "params": {
+      "filter": "ivanov",
+      "limit": 10
+    }
+  }
+}
+```
+
+Passwork group membership:
+
+```json
+{
+  "eventId": "idm-1001:passwork-prod:add-group",
+  "operation": "group.addMember",
+  "targetSystem": "passwork-prod",
+  "payload": {
+    "params": {
+      "groupId": "passwork-group-id",
+      "userId": "passwork-user-id"
+    }
+  }
+}
+```
+
+Passwork supported operations in v1 are user/group lifecycle, block/unblock,
+`schema.get` and `sync.full`. `user.changePassword`, custom user attributes and
+`sync.incremental` are reported as unsupported. Password item, vault, folder and
+decrypted secret operations are intentionally out of scope for this connector.
 
 Response semantics:
 

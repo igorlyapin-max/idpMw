@@ -92,8 +92,9 @@ For Oracle, `DB_CONNECTOR_URL` must use TCPS, for example
 
 ### Target systems
 
-Zabbix, CMDBuild, REST and fake remote target configs support the same `tls`
-object. If `tls.enabled=true`, `baseUrl`/target URL must be `https://`.
+Zabbix, CMDBuild, Passwork, REST and fake remote target configs support the
+same `tls` object. If `tls.enabled=true`, `baseUrl`/target URL must be
+`https://`.
 
 ```json
 {

@@ -81,7 +81,7 @@ docker compose -f docker-compose.monitoring.yml up -d
 | DLQ                | Хранение неуспешных событий для ручной обработки                                                                |
 | Audit              | Логирование всех входящих и исходящих вызовов                                                                   |
 | Dispatcher         | Маршрутизация событий → коннекторы                                                                              |
-| Connectors         | REST, DB (SQL через knex), Zabbix, CMDBuild                                                                     |
+| Connectors         | REST, DB (SQL через knex), Zabbix, CMDBuild, Passwork                                                           |
 | Kafka (опц.)       | Event mirror, DLQ retry и async worker pipeline                                                                 |
 | Admin API          | DLQ management, Target Systems management, protected by optional admin auth                                     |
 | Admin UI           | React-приложение для DLQ, Target Systems и ручного retry                                                        |
@@ -148,7 +148,7 @@ LOG_FILE_PATH=/tmp/idmmw.log # используется при LOG_SINK=file
 - **AuditLog** — запись всех webhook и исходящих вызовов
 - **DlqItem** — неуспешные события (status: pending, retrying, skipped, resolved)
 - **IdempotencyKey** — ключи для deduplication
-- **TargetSystem** — конфигурация целевых систем (Zabbix, CMDBuild, REST, DB)
+- **TargetSystem** — конфигурация целевых систем (Zabbix, CMDBuild, Passwork, REST, DB)
 - **EncryptionState** — состояние включенного шифрования и active key id
 
 ## Security: TLS и шифрование
@@ -286,6 +286,17 @@ Live HA проверка на текущем стенде:
 # Использует Redis 127.0.0.1:16379 и Kafka 127.0.0.1:9092
 npm run test:ha-live
 ```
+
+Deployment profiles for CI and rollout:
+
+- `sqlite-test`: one worker, SQLite, no Kafka/Redis; used by CI smoke.
+- `prod-ha-yugabyte`: recommended production HA profile with external Kafka and
+  YugabyteDB YSQL through the normal PostgreSQL Prisma schema.
+- `prod-ha-cockroach`: alternative HA profile with
+  `prisma/schema.cockroach.prisma`.
+
+Detailed profile contracts and commands:
+[docs/DEPLOYMENT_PROFILES.md](docs/DEPLOYMENT_PROFILES.md).
 
 ## API Endpoints
 
@@ -448,7 +459,32 @@ POST /admin/target-systems
 }
 ```
 
-Поддерживаемые типы: `zabbix`, `cmdbuild`, `rest`, `db`, `fake`.
+Для Passwork используйте отдельный `TargetSystem` типа `passwork`. V1 connector
+управляет пользователями и группами Passwork через HTTP API и не читает,
+не расшифровывает и не изменяет password/vault item secrets.
+
+```json
+{
+  "name": "passwork-prod",
+  "type": "passwork",
+  "label": "Passwork Production",
+  "config": {
+    "baseUrl": "https://passwork.example.local",
+    "accessToken": "REPLACE_WITH_SECRET",
+    "responseFormat": "raw",
+    "timeout": 30000,
+    "tls": {
+      "enabled": true,
+      "caPath": "/etc/idmmw/tls/passwork-ca.crt",
+      "serverName": "passwork.example.local",
+      "rejectUnauthorized": true
+    }
+  },
+  "enabled": true
+}
+```
+
+Поддерживаемые типы: `zabbix`, `cmdbuild`, `passwork`, `rest`, `db`, `fake`.
 
 `retryPolicy` задаётся для конкретной управляемой системы. Он применяется к
 обычной обработке write-событий и к ручному DLQ retry. Если политика не задана,
