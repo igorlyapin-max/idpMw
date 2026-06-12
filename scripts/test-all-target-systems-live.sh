@@ -16,6 +16,7 @@ LOG_PATH="${IDMMW_LIVE_LOG_PATH:-${TMP_DIR}/idmmw.log}"
 STDOUT_PATH="${IDMMW_LIVE_STDOUT_PATH:-${TMP_DIR}/idmmw-stdout.log}"
 REST_STATE_PATH="${IDMMW_LIVE_REST_STATE_PATH:-${TMP_DIR}/rest-target-state.json}"
 TARGET_DB_PATH="${IDMMW_LIVE_TARGET_DB_PATH:-${TMP_DIR}/db-target.sqlite}"
+CMDBUILD_USERNAME_MAX_LENGTH="${CMDBUILD_USERNAME_MAX_LENGTH:-40}"
 APP_PID=""
 REST_PID=""
 CURRENT_PROVIDER=""
@@ -202,6 +203,22 @@ write_json() {
   local out_file="$1"
   local json="$2"
   printf '%s' "$json" >"$out_file"
+}
+
+live_username() {
+  local prefix="$1"
+  local max_len="$2"
+  LOGIN_PREFIX="$prefix" LOGIN_MAX_LENGTH="$max_len" RUN_ID="$RUN_ID" node -e '
+const prefix = process.env.LOGIN_PREFIX || "";
+const max = Number(process.env.LOGIN_MAX_LENGTH || "64");
+const seed = (process.env.RUN_ID || "").replace(/[^A-Za-z0-9]/g, "") || String(Date.now());
+const room = Math.max(0, max - prefix.length);
+let suffix = seed;
+if (suffix.length > room) {
+  suffix = room <= 8 ? seed.slice(-room) : `${seed.slice(0, room - 8)}${seed.slice(-8)}`;
+}
+process.stdout.write(`${prefix}${suffix}`.slice(0, max));
+'
 }
 
 create_target_system() {
@@ -425,7 +442,8 @@ start_idmmw() {
 
 test_fake() {
   local target="fake-live-${RUN_ID}"
-  local username="idmmw-live-${RUN_ID}-fake"
+  local username
+  username="$(live_username "idmfake-" 64)"
   write_json "$TMP_DIR/fake-config.json" "{\"baseUrl\":\"http://127.0.0.1:${REST_PORT}\",\"timeout\":10000}"
   local target_id
   target_id="$(create_target_system "$target" "fake" "Live Fake Target" "$TMP_DIR/fake-config.json")"
@@ -442,7 +460,8 @@ test_fake() {
 
 test_rest() {
   local target="rest-live-${RUN_ID}"
-  local username="idmmw-live-${RUN_ID}-rest"
+  local username
+  username="$(live_username "idmrest-" 64)"
   write_json "$TMP_DIR/rest-config.json" "{\"baseUrl\":\"http://127.0.0.1:${REST_PORT}\",\"allowedPaths\":[\"/users\"],\"allowPrivateNetwork\":true,\"timeout\":10000}"
   local target_id
   target_id="$(create_target_system "$target" "rest" "Live REST Target" "$TMP_DIR/rest-config.json")"
@@ -460,7 +479,8 @@ test_rest() {
 
 test_db() {
   local target="db-live-${RUN_ID}"
-  local username="idmmw-live-${RUN_ID}-db"
+  local username
+  username="$(live_username "idmdb-" 64)"
   write_json "$TMP_DIR/db-config.json" "{\"client\":\"sqlite3\",\"connection\":{\"filename\":\"${TARGET_DB_PATH}\"},\"pool\":{\"min\":1,\"max\":1}}"
   local target_id
   target_id="$(create_target_system "$target" "db" "Live DB Target" "$TMP_DIR/db-config.json")"
@@ -482,7 +502,8 @@ test_zabbix() {
   local group_id="${ZABBIX_USER_GROUP_ID:-${ZABBIX_ENABLE_GROUP_ID:-7}}"
   local role_id="${ZABBIX_USER_ROLE_ID:-3}"
   local target="zabbix-live-${RUN_ID}"
-  local login="idmmw-live-${RUN_ID}-zabbix"
+  local login
+  login="$(live_username "idmzbx-" 64)"
 
   if ! curl -fsS \
     -H "Content-Type: application/json" \
@@ -529,7 +550,8 @@ test_cmdbuild() {
   local api_path="${CMDBUILD_API_PATH:-/cmdbuild/services/rest/v3}"
   local group_id="${CMDBUILD_DEFAULT_USER_GROUP_ID:-}"
   local target="cmdbuild-live-${RUN_ID}"
-  local login="idmmw-live-${RUN_ID}-cmdbuild"
+  local login
+  login="$(live_username "idmcmdb-" "$CMDBUILD_USERNAME_MAX_LENGTH")"
 
   if ! curl -fsS "${base_url%/}/cmdbuild/ui" >/dev/null 2>&1; then
     report_step "$target" "cmdbuild" "blocked" "CMDBuild UI endpoint is not reachable" "{\"baseUrl\":\"${base_url}\"}"
@@ -557,9 +579,9 @@ fs.writeFileSync(out, JSON.stringify(config));
   write_json "$TMP_DIR/empty.json" "{}"
   if webhook_json "$target" "user.create" "$TMP_DIR/cmdbuild-user.json" "$TMP_DIR/empty.json" "$TMP_DIR/empty.json" "$TMP_DIR/cmdbuild-create.json"; then
     idm_json GET "/idm/${target}/users?filter=${login}&limit=10" "" "$TMP_DIR/cmdbuild-search.json" || true
-    report_step "$target" "cmdbuild" "passed" "Created CMDBuild user artifact" "{\"targetSystemId\":\"${target_id}\",\"username\":\"${login}\",\"baseUrl\":\"${base_url}\"}"
+    report_step "$target" "cmdbuild" "passed" "Created CMDBuild user artifact" "{\"targetSystemId\":\"${target_id}\",\"username\":\"${login}\",\"usernameLength\":${#login},\"usernameMaxLength\":${CMDBUILD_USERNAME_MAX_LENGTH},\"baseUrl\":\"${base_url}\"}"
   else
-    report_step "$target" "cmdbuild" "blocked" "CMDBuild target rejected user.create; local demo commonly requires elevated IAM write grants for /users" "{\"targetSystemId\":\"${target_id}\",\"username\":\"${login}\",\"baseUrl\":\"${base_url}\",\"requiresUserWriteGrants\":true}"
+    report_step "$target" "cmdbuild" "blocked" "CMDBuild target rejected user.create; check CMDBuild application log for grants or model validation" "{\"targetSystemId\":\"${target_id}\",\"username\":\"${login}\",\"usernameLength\":${#login},\"usernameMaxLength\":${CMDBUILD_USERNAME_MAX_LENGTH},\"baseUrl\":\"${base_url}\"}"
   fi
 }
 
