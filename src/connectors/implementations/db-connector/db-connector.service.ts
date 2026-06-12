@@ -84,7 +84,15 @@ export class DbConnectorService
   }
 
   async execute(payload: ConnectorPayload): Promise<ConnectorResult> {
-    if (!this.knex) {
+    const dynamicConfig = payload.payload['config'] as
+      | DbConnectorKnexInput
+      | undefined;
+    const knexClient = dynamicConfig
+      ? await this.createDynamicKnex(dynamicConfig)
+      : this.knex;
+    const shouldDestroy = Boolean(dynamicConfig);
+
+    if (!knexClient) {
       return { success: false, error: 'DB connector not initialized' };
     }
 
@@ -100,7 +108,7 @@ export class DbConnectorService
     try {
       if (rawQuery) {
         // @ts-expect-error knex raw bindings type mismatch
-        const result: unknown = await this.knex.raw(rawQuery, bindings ?? []);
+        const result: unknown = await knexClient.raw(rawQuery, bindings ?? []);
         return { success: true, data: result };
       }
 
@@ -113,25 +121,25 @@ export class DbConnectorService
 
       switch (operation) {
         case 'insert': {
-          const result = await this.knex(table).insert(data);
+          const result = await knexClient(table).insert(data);
           return { success: true, data: result };
         }
         case 'update': {
           if (!where) {
             return { success: false, error: 'Missing where clause for update' };
           }
-          const result = await this.knex(table).where(where).update(data);
+          const result = await knexClient(table).where(where).update(data);
           return { success: true, data: result };
         }
         case 'delete': {
           if (!where) {
             return { success: false, error: 'Missing where clause for delete' };
           }
-          const result = await this.knex(table).where(where).del();
+          const result = await knexClient(table).where(where).del();
           return { success: true, data: result };
         }
         case 'query': {
-          const result = await this.knex(table).where(where ?? {});
+          const result = await knexClient(table).where(where ?? {});
           return { success: true, data: result };
         }
         default:
@@ -144,6 +152,10 @@ export class DbConnectorService
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.error(`DB operation failed: ${msg}`);
       return { success: false, error: msg };
+    } finally {
+      if (shouldDestroy) {
+        await knexClient.destroy();
+      }
     }
   }
 
@@ -281,5 +293,28 @@ export class DbConnectorService
         pool,
       },
     };
+  }
+
+  private async createDynamicKnex(
+    config: DbConnectorKnexInput,
+  ): Promise<Knex | undefined> {
+    const knexConfig = this.buildKnexConfig(
+      {
+        client: config.client,
+        connection: config.connection,
+        connectString: config.connectString,
+        username: config.username,
+        user: config.user,
+        password: config.password,
+        pool: config.pool ?? { min: 1, max: 2 },
+        tls: config.tls,
+      },
+      'dynamic',
+    );
+    if (!knexConfig.success) {
+      this.logger.error(knexConfig.error);
+      return undefined;
+    }
+    return knex(knexConfig.config);
   }
 }

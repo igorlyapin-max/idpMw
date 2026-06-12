@@ -3,12 +3,11 @@ import {
   Post,
   Body,
   Logger,
-  Req,
   HttpCode,
   Param,
   BadRequestException,
 } from '@nestjs/common';
-import type { Request } from 'express';
+import { ConfigService } from '@nestjs/config';
 import { MockIdmService } from './mock-idm.service';
 import type { MockIdmEvent } from './mock-idm.service';
 import { AVANPOST_OPERATION_VALUES } from '../inbound/webhooks/avanpost-operation.enum';
@@ -70,11 +69,22 @@ function kebabToDot(name: string): string | undefined {
 export class MockIdmController {
   private readonly logger = new Logger(MockIdmController.name);
 
-  constructor(private readonly mockIdmService: MockIdmService) {}
+  constructor(
+    private readonly mockIdmService: MockIdmService,
+    private readonly config: ConfigService,
+  ) {}
 
-  private getMiddlewareUrl(req: Request): string {
-    const host = req.get('host') ?? 'localhost:3010';
-    return `${req.protocol}://${host}`;
+  private getMiddlewareUrl(): string {
+    const configured = this.config.get<string>('MOCK_IDM_MIDDLEWARE_URL');
+    if (configured) {
+      return configured;
+    }
+    const scheme =
+      (this.config.get<boolean>('HTTP_TLS_ENABLED') ?? false)
+        ? 'https'
+        : 'http';
+    const port = this.config.get<number>('PORT') ?? 3010;
+    return `${scheme}://127.0.0.1:${port}`;
   }
 
   private resolveOperation(name: string): string {
@@ -92,10 +102,9 @@ export class MockIdmController {
   @HttpCode(200)
   async runScenario(
     @Param('name') name: string,
-    @Req() req: Request,
   ): Promise<{ success: boolean; event: MockIdmEvent; data?: unknown }> {
     const operation = this.resolveOperation(name);
-    const url = this.getMiddlewareUrl(req);
+    const url = this.getMiddlewareUrl();
 
     if (operation === 'duplicate') {
       const event = this.mockIdmService.generateEvent('user.create');
@@ -133,13 +142,10 @@ export class MockIdmController {
 
   @Post('send-event')
   @HttpCode(200)
-  async sendEvent(
-    @Req() req: Request,
-    @Body() event: MockIdmEvent,
-  ): Promise<{ success: boolean }> {
+  async sendEvent(@Body() event: MockIdmEvent): Promise<{ success: boolean }> {
     await this.mockIdmService.sendEventToMiddleware(
       event,
-      this.getMiddlewareUrl(req),
+      this.getMiddlewareUrl(),
     );
     return { success: true };
   }

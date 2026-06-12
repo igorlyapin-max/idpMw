@@ -715,9 +715,11 @@ HTTP_TLS_REJECT_UNAUTHORIZED=true
 - `ADMIN_AUTH_ENABLED` защищает `/admin/*` и Admin UI session endpoints.
 - Admin auth не применяется к `/webhooks/avanpost`, `/idm/*`, `/health` и
   `/metrics`.
-- Для `/webhooks/avanpost` и `/idm/*` используйте сетевой периметр, TLS/mTLS,
-  reverse proxy или отдельный gateway auth, если это требуется политикой
-  эксплуатации.
+- Для `/webhooks/avanpost` и `/idm/*` включайте
+  `INTEGRATION_AUTH_ENABLED=true`: IDM должен передавать
+  `X-IDMMW-Timestamp` и `X-IDMMW-Signature`, где signature считается HMAC-SHA256
+  от timestamp, HTTP method, path и SHA-256 body. `/metrics` закрывается тем же
+  контрактом при `METRICS_PUBLIC_ENABLED=false`.
 - TLS для исходящих соединений к целевым системам задаётся в
   `TargetSystem.config.tls`.
 

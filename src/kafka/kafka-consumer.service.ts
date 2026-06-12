@@ -12,7 +12,6 @@ import {
   ProcessingPayload,
 } from '../core/processing.service';
 import { KafkaProducerService } from './kafka-producer.service';
-import { DlqService } from '../core/dlq/dlq.service';
 import { EncryptionService } from '../security/encryption.service';
 import { TlsOptionsFactory } from '../security/tls-options.factory';
 
@@ -25,7 +24,6 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
     private readonly config: ConfigService,
     private readonly processing: ProcessingService,
     private readonly producer: KafkaProducerService,
-    private readonly dlq: DlqService,
     @Optional() private readonly tlsOptions?: TlsOptionsFactory,
     @Optional() private readonly encryption?: EncryptionService,
   ) {}
@@ -81,9 +79,10 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
               dlqItemId?: string;
             });
           const { dlqItemId, ...payload } = messageValue;
-          await this.processing.process(payload);
           if (dlqItemId) {
-            await this.dlq.resolve(dlqItemId);
+            await this.processing.processRetry(payload, dlqItemId);
+          } else {
+            await this.processing.process(payload);
           }
           await this.producer.send(
             this.config.get<string>('KAFKA_TOPIC_EVENTS_OUT') ??

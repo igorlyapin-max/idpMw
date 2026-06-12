@@ -7,6 +7,10 @@ import {
 import { PrismaService } from '../database/prisma.service';
 import { JsonHelper } from '../database/json.helper';
 import { ConnectorRegistry } from '../connectors/connector.registry';
+import {
+  mergeConfigPreservingSecrets,
+  redactSecrets,
+} from '../security/secret-redaction';
 import type {
   CreateTargetSystemDto,
   UpdateTargetSystemDto,
@@ -37,28 +41,30 @@ export class TargetSystemService {
       skip: params.offset ?? 0,
       orderBy: { createdAt: 'desc' },
     });
-    return items.map((item) => ({
-      ...item,
-      config: this.jsonHelper.fromJson<Record<string, unknown>>(item.config),
-    }));
+    return items.map((item) => this.toPublicTargetSystem(item));
   }
 
   async findById(id: string) {
     const item = await this.prisma.targetSystem.findUnique({ where: { id } });
     if (!item) return null;
-    return {
-      ...item,
-      config: this.jsonHelper.fromJson<Record<string, unknown>>(item.config),
-    };
+    return this.toPublicTargetSystem(item);
   }
 
   async findByName(name: string) {
     const item = await this.prisma.targetSystem.findUnique({ where: { name } });
     if (!item) return null;
-    return {
-      ...item,
-      config: this.jsonHelper.fromJson<Record<string, unknown>>(item.config),
-    };
+    return this.toPublicTargetSystem(item);
+  }
+
+  async findRawConfigByName(
+    name: string,
+  ): Promise<Record<string, unknown> | null> {
+    const item = await this.prisma.targetSystem.findUnique({
+      where: { name },
+      select: { config: true },
+    });
+    if (!item) return null;
+    return this.jsonHelper.fromJson<Record<string, unknown>>(item.config) ?? {};
   }
 
   async create(dto: CreateTargetSystemDto) {
@@ -73,10 +79,7 @@ export class TargetSystemService {
           enabled: dto.enabled ?? true,
         },
       });
-      return {
-        ...item,
-        config: this.jsonHelper.fromJson<Record<string, unknown>>(item.config),
-      };
+      return this.toPublicTargetSystem(item);
     } catch (error: unknown) {
       this.handlePrismaMutationError(error);
     }
@@ -84,6 +87,20 @@ export class TargetSystemService {
 
   async update(id: string, dto: UpdateTargetSystemDto) {
     try {
+      const current =
+        dto.config !== undefined
+          ? await this.prisma.targetSystem.findUnique({ where: { id } })
+          : null;
+      const currentConfig =
+        current && dto.config !== undefined
+          ? (this.jsonHelper.fromJson<Record<string, unknown>>(
+              current.config,
+            ) ?? {})
+          : {};
+      const nextConfig =
+        dto.config !== undefined
+          ? mergeConfigPreservingSecrets(currentConfig, dto.config)
+          : undefined;
       const item = await this.prisma.targetSystem.update({
         where: { id },
         data: {
@@ -93,16 +110,13 @@ export class TargetSystemService {
           ...(dto.config !== undefined
             ? {
                 // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-                config: this.jsonHelper.toJson(dto.config) as any,
+                config: this.jsonHelper.toJson(nextConfig) as any,
               }
             : {}),
           ...(dto.enabled !== undefined ? { enabled: dto.enabled } : {}),
         },
       });
-      return {
-        ...item,
-        config: this.jsonHelper.fromJson<Record<string, unknown>>(item.config),
-      };
+      return this.toPublicTargetSystem(item);
     } catch (error: unknown) {
       this.handlePrismaMutationError(error);
     }
@@ -111,10 +125,7 @@ export class TargetSystemService {
   async delete(id: string) {
     try {
       const item = await this.prisma.targetSystem.delete({ where: { id } });
-      return {
-        ...item,
-        config: this.jsonHelper.fromJson<Record<string, unknown>>(item.config),
-      };
+      return this.toPublicTargetSystem(item);
     } catch (error: unknown) {
       this.handlePrismaMutationError(error);
     }
@@ -151,5 +162,16 @@ export class TargetSystemService {
       'code' in error &&
       (error as { code?: unknown }).code === code
     );
+  }
+
+  private toPublicTargetSystem<T extends { config: unknown }>(
+    item: T,
+  ): Omit<T, 'config'> & { config: Record<string, unknown> } {
+    const config =
+      this.jsonHelper.fromJson<Record<string, unknown>>(item.config) ?? {};
+    return {
+      ...item,
+      config: redactSecrets(config) as Record<string, unknown>,
+    };
   }
 }

@@ -41,9 +41,12 @@ ADMIN_AUTH_COOKIE_SECURE=true
 становится `Secure` по умолчанию. Для SSO используйте доверенный reverse proxy,
 который передает `ADMIN_AUTH_SSO_USER_HEADER` и
 `ADMIN_AUTH_SSO_GROUPS_HEADER`; доступ ограничивайте через
-`ADMIN_AUTH_ALLOWLIST` или `ADMIN_AUTH_ALLOWED_GROUPS`. Admin auth защищает
-`/admin/*`; IDM inbound API, `/idm/*`, `/health` и `/metrics` остаются
-доступны по своему runtime contract.
+`ADMIN_AUTH_ALLOWLIST` или `ADMIN_AUTH_ALLOWED_GROUPS`. SSO modes также требуют
+`ADMIN_AUTH_TRUSTED_PROXY_CIDRS`, иначе spoofable SSO headers отклоняются.
+Admin auth защищает `/admin/*`; IDM inbound API и `/idm/*` защищаются отдельным
+HMAC runtime contract при `INTEGRATION_AUTH_ENABLED=true`. `/health` остаётся
+публичным liveness, `/ready` и `/metrics` публикуются по внутреннему runtime
+периметру.
 
 ### Redis
 

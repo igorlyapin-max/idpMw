@@ -2,6 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHmac, randomBytes, timingSafeEqual, createHash } from 'crypto';
 import type { Request, Response } from 'express';
+import { isIpAllowed } from '../security/ip-utils';
 
 export interface AdminUserSession {
   sub: string;
@@ -114,6 +115,9 @@ export class AuthService {
     if (this.mode() === 'local') {
       throw new UnauthorizedException('SSO admin login is disabled');
     }
+    if (!this.isTrustedSsoSource(req)) {
+      throw new UnauthorizedException('SSO headers require a trusted proxy');
+    }
 
     const identity = this.extractSsoIdentity(req);
     if (!identity || !this.isSsoAllowed(identity)) {
@@ -146,7 +150,9 @@ export class AuthService {
     }
 
     if (this.mode() !== 'local' && res) {
-      const identity = this.extractSsoIdentity(req);
+      const identity = this.isTrustedSsoSource(req)
+        ? this.extractSsoIdentity(req)
+        : null;
       if (identity && this.isSsoAllowed(identity)) {
         const ssoSession = this.createSession(
           identity.user,
@@ -286,6 +292,17 @@ export class AuthService {
       .map((group) => group.trim())
       .filter(Boolean);
     return { user, groups };
+  }
+
+  private isTrustedSsoSource(req: Request): boolean {
+    const allowlist = this.csv('ADMIN_AUTH_TRUSTED_PROXY_CIDRS');
+    if (allowlist.length === 0) {
+      return false;
+    }
+
+    return [req.ip, req.socket?.remoteAddress].some((candidate) =>
+      isIpAllowed(candidate, allowlist),
+    );
   }
 
   private isSsoAllowed(identity: SsoIdentity): boolean {

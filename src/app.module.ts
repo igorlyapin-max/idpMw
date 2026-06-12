@@ -20,10 +20,14 @@ import { SecurityModule } from './security/security.module';
 import { AuthModule } from './auth/auth.module';
 import { AdminAuthMiddleware } from './auth/admin-auth.middleware';
 import { AdminUiModule } from './admin-ui/admin-ui.module';
+import { IntegrationAuthMiddleware } from './security/integration-auth.middleware';
 
 applyPamCompatibility();
 
 const isLightweight = process.env['LIGHTWEIGHT_MODE'] === 'true';
+const mockIdmEnabled =
+  process.env['MOCK_IDM_ENABLED'] === 'true' &&
+  process.env['NODE_ENV'] !== 'production';
 const adminUiApiExcludes = [
   '/admin/{*any}',
   '/api/{*any}',
@@ -60,7 +64,7 @@ const adminUiApiExcludes = [
     AuthModule,
     PrismaModule,
     HealthModule,
-    MockIdmModule,
+    ...(mockIdmEnabled ? [MockIdmModule] : []),
     WebhooksModule,
     ...(isLightweight ? [] : [KafkaModule]),
     AdminModule,
@@ -98,6 +102,12 @@ const adminUiApiExcludes = [
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
-    consumer.apply(HttpMetricsMiddleware, AdminAuthMiddleware).forRoutes('*');
+    consumer
+      .apply(
+        HttpMetricsMiddleware,
+        IntegrationAuthMiddleware,
+        AdminAuthMiddleware,
+      )
+      .forRoutes('*');
   }
 }

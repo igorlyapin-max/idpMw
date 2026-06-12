@@ -19,6 +19,7 @@
 ```bash
 # Health endpoint
 curl -s http://localhost:3010/health | jq .
+curl -s http://localhost:3010/ready | jq .
 # Ожидаемый ответ: {"status":"ok","info":{"database":{"status":"up"}}}
 
 # Prometheus метрики
@@ -33,8 +34,8 @@ curl -s http://localhost:3010/api-json | head -c 200
 | Компонент  | Проверка                                       | Критичность                                |
 | ---------- | ---------------------------------------------- | ------------------------------------------ |
 | PostgreSQL | `pg_isready -U idmmw -d idmmw`                 | Критично                                   |
-| Redis      | `/health` показывает `redis.enabled/status`    | Критично при `REDIS_ENABLED=true`          |
-| Kafka      | `/health` показывает `kafka.enabled` и brokers | Критично при `IDMMW_PROCESSING_MODE=async` |
+| Redis      | `/ready` показывает `redis.enabled/status`     | Критично при `REDIS_ENABLED=true`          |
+| Kafka      | `/ready` показывает `kafka.enabled` и brokers  | Критично при `IDMMW_PROCESSING_MODE=async` |
 | App        | `curl /health`                                 | Критично                                   |
 
 ## Security: TLS и шифрование
@@ -129,8 +130,11 @@ curl -s -b /tmp/idmmw.cookies http://localhost:3010/admin/stats | jq .
 ```
 
 Если auth включён, все write-запросы к `/admin/*` должны передавать
-`X-CSRF-Token` из `/auth/session` или ответа `/auth/login`. `/health`,
-`/metrics`, `/webhooks/avanpost` и `/idm/*` не требуют Admin UI session.
+`X-CSRF-Token` из `/auth/session` или ответа `/auth/login`. `/webhooks/avanpost`
+и `/idm/*` не требуют Admin UI session, но при
+`INTEGRATION_AUTH_ENABLED=true` требуют HMAC headers
+`X-IDMMW-Timestamp` и `X-IDMMW-Signature`. `/metrics` закрывается тем же
+контрактом при `METRICS_PUBLIC_ENABLED=false`.
 
 ## DLQ: диагностика и ротация
 
@@ -293,7 +297,7 @@ curl -s http://localhost:3010/admin/dlq?status=pending | jq 'length'
 
 ### Сценарий 4: Redis недоступен
 
-**Признак:** startup error или `/health` показывает `redis.status=down` при `REDIS_ENABLED=true`.
+**Признак:** startup error или `/ready` показывает `redis.status=down` при `REDIS_ENABLED=true`.
 
 **Действие:** Проверить доступность Redis, host/port/password/db и сетевой маршрут. При аварийном fallback можно временно перейти на PostgreSQL idempotency store.
 

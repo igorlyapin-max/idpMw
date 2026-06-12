@@ -29,6 +29,10 @@ describe('TargetSystem (e2e)', () => {
       console.log('CREATE RESPONSE:', createRes.status, createRes.body);
     }
     expect(createRes.status).toBe(201);
+    expect(JSON.stringify(createRes.body)).not.toContain('"key":"k"');
+    expect(createRes.body).toMatchObject({
+      config: { key: '***' },
+    });
 
     const id = (createRes.body as { id: string }).id;
     expect(id).toBeDefined();
@@ -39,10 +43,11 @@ describe('TargetSystem (e2e)', () => {
 
     const items = listRes.body as Array<{ id: string; name: string }>;
     expect(items.some((i) => i.id === id)).toBe(true);
+    expect(JSON.stringify(listRes.body)).not.toContain('"key":"k"');
 
     await request(app.getHttpServer())
       .patch(`/admin/target-systems/${id}`)
-      .send({ label: 'Updated' })
+      .send({ label: 'Updated', config: { key: '***', username: 'u2' } })
       .expect(200);
 
     await request(app.getHttpServer())

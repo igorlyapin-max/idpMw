@@ -98,6 +98,19 @@ export class DlqService {
     await this.updateMetrics();
   }
 
+  async markRetryFailed(id: string, error: string): Promise<void> {
+    await this.prisma.dlqItem.update({
+      where: { id },
+      data: {
+        status: 'pending',
+        error,
+        lockedAt: null,
+        lockedBy: null,
+      },
+    });
+    await this.updateMetrics();
+  }
+
   async updateMetrics(): Promise<void> {
     const counts = await this.prisma.dlqItem.groupBy({
       by: ['status'],

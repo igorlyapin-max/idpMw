@@ -1,12 +1,17 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
-import { AppModule } from '../src/app.module';
 import {
   AVANPOST_OPERATION_VALUES,
   READ_OPERATIONS,
 } from '../src/inbound/webhooks/avanpost-operation.enum';
 import type { WebhookResponse } from '../src/inbound/webhooks/webhook.controller';
+
+const originalMockIdmEnabled = process.env['MOCK_IDM_ENABLED'];
+process.env['MOCK_IDM_ENABLED'] = 'true';
+
+const { AppModule } =
+  jest.requireActual<typeof import('../src/app.module')>('../src/app.module');
 
 describe('IDM Contract (e2e)', () => {
   let app: INestApplication;
@@ -25,6 +30,11 @@ describe('IDM Contract (e2e)', () => {
 
   afterAll(async () => {
     await app.close();
+    if (originalMockIdmEnabled === undefined) {
+      delete process.env['MOCK_IDM_ENABLED'];
+    } else {
+      process.env['MOCK_IDM_ENABLED'] = originalMockIdmEnabled;
+    }
   });
 
   describe('operation validation', () => {
@@ -378,6 +388,49 @@ describe('IDM Contract (e2e)', () => {
 
       expect((first.body as WebhookResponse).processed).toBe(true);
       expect((second.body as WebhookResponse).processed).toBe(false);
+    });
+
+    it('should scope duplicate eventId by targetSystem', async () => {
+      const suffix = Date.now();
+      const eventId = `same-business-event-${suffix}`;
+      const targets = [`fake-scope-a-${suffix}`, `fake-scope-b-${suffix}`];
+      const createdIds: string[] = [];
+
+      try {
+        for (const target of targets) {
+          const createRes = await request(app.getHttpServer())
+            .post('/admin/target-systems')
+            .send({
+              name: target,
+              type: 'fake',
+              label: target,
+              config: { baseUrl: 'fake://local' },
+              enabled: true,
+            })
+            .expect(201);
+          createdIds.push((createRes.body as { id: string }).id);
+        }
+
+        for (const target of targets) {
+          const res = await request(app.getHttpServer())
+            .post('/webhooks/avanpost')
+            .send({
+              eventId,
+              operation: 'user.create',
+              targetSystem: target,
+              payload: { data: { username: target } },
+            })
+            .expect(201);
+
+          expect((res.body as WebhookResponse).processed).toBe(true);
+        }
+      } finally {
+        for (const id of createdIds) {
+          await request(app.getHttpServer()).delete(
+            `/admin/target-systems/${id}`,
+          );
+        }
+      }
     });
   });
 

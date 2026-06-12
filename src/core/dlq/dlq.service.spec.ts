@@ -117,4 +117,20 @@ describe('DlqService', () => {
       data: { status: 'resolved', lockedAt: null, lockedBy: null },
     });
   });
+
+  it('returns failed retry to pending and clears lease', async () => {
+    prisma.dlqItem.update.mockResolvedValue({ id: 'dlq-1' });
+
+    await service.markRetryFailed('dlq-1', 'retry failed');
+
+    expect(prisma.dlqItem.update).toHaveBeenCalledWith({
+      where: { id: 'dlq-1' },
+      data: {
+        status: 'pending',
+        error: 'retry failed',
+        lockedAt: null,
+        lockedBy: null,
+      },
+    });
+  });
 });

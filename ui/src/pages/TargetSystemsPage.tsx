@@ -211,6 +211,9 @@ function buildConfig(form: TargetSystemForm): Record<string, unknown> {
   const cfg: Record<string, unknown> = { ...form.extraConfig };
   TYPE_FIELDS[form.type]?.forEach((field) => {
     const value = form.configValues[field.name];
+    if (isSecretConfigKey(field.name) && isMaskedSecretPlaceholder(value)) {
+      return;
+    }
     if (value !== undefined && value !== '') {
       cfg[field.name] = value;
     }
@@ -258,8 +261,16 @@ function retryPolicyFromConfig(
 
 const SECRET_CONFIG_KEY_PATTERN = /(pass|token|secret|key|code|credential)/i;
 
+function isSecretConfigKey(key: string): boolean {
+  return SECRET_CONFIG_KEY_PATTERN.test(key);
+}
+
+function isMaskedSecretPlaceholder(value: unknown): boolean {
+  return typeof value === 'string' && value.trim().startsWith('***');
+}
+
 function formatExtraConfigValue(key: string, value: unknown): string {
-  if (SECRET_CONFIG_KEY_PATTERN.test(key)) {
+  if (isSecretConfigKey(key)) {
     return value === undefined || value === null || value === ''
       ? ''
       : '*** preserved ***';
@@ -359,7 +370,10 @@ export function TargetSystemsPage() {
         return;
       }
       if (fieldNames.has(key)) {
-        configValues[key] = String(value ?? '');
+        configValues[key] =
+          isSecretConfigKey(key) && isMaskedSecretPlaceholder(value)
+            ? ''
+            : String(value ?? '');
       } else {
         extraConfig[key] = value;
       }

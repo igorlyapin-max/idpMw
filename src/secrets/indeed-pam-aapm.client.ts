@@ -46,10 +46,12 @@ export class IndeedPamAapmClient {
       this.value('SECRETS_INDEEDPAMAAPM_VALUEJSONPATH') ??
       'password';
     const timeoutMs = this.intValue('SECRETS_INDEEDPAMAAPM_TIMEOUTMS', 10000);
+    const tokenTransport =
+      this.value('SECRETS_INDEEDPAMAAPM_TOKEN_TRANSPORT') ?? 'header';
 
     const creds = await this.readCredentials();
     const url = this.buildUrl(baseUrl, endpointPath, {
-      token: creds.tkn,
+      token: tokenTransport === 'query' ? creds.tkn : undefined,
       sapmaccountpath: acctPath,
       sapmaccountname: acctName,
       responsetype: respType,
@@ -72,6 +74,11 @@ export class IndeedPamAapmClient {
         this.value(`SECRETS_REFERENCES_${this.sanitizeKey(refId)}_PIN`) ??
         this.value('SECRETS_INDEEDPAMAAPM_PIN'),
     });
+    if (creds.tkn && tokenTransport === 'query') {
+      this.logger.warn(
+        'PAM application token is configured for query-string transport; prefer SECRETS_INDEEDPAMAAPM_TOKEN_TRANSPORT=header',
+      );
+    }
 
     try {
       const response = await axios.get(url, {
@@ -80,9 +87,10 @@ export class IndeedPamAapmClient {
           creds.user && creds.val
             ? { username: creds.user, password: creds.val }
             : undefined,
-        headers: creds.tkn
-          ? { Authorization: `Bearer ${creds.tkn}` }
-          : undefined,
+        headers:
+          creds.tkn && tokenTransport !== 'query'
+            ? { Authorization: `Bearer ${creds.tkn}` }
+            : undefined,
       });
 
       const result = this.extractValue(response.data, respType, valueJsonPath);

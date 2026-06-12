@@ -23,6 +23,7 @@
     "test:runtime-smoke": "bash scripts/test-runtime-smoke.sh",
     "test:ha-live": "bash scripts/test-ha-live.sh",
     "test:passwork-live": "bash scripts/test-passwork-live.sh",
+    "test:all-target-systems-live": "bash scripts/test-all-target-systems-live.sh",
     "profile:validate": "bash scripts/validate-deployment-profile.sh",
     "profile:smoke:sqlite": "bash scripts/smoke-sqlite-profile.sh",
     "profile:validate:prod-ha": "bash scripts/validate-prod-ha-profile.sh",

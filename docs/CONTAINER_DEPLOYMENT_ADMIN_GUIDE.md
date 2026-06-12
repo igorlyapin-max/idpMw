@@ -186,6 +186,7 @@ The app resolves secret references during startup when these variables are set:
 SECRETS_PROVIDER=IndeedPamAapm
 SECRETS_INDEEDPAMAAPM_BASEURL=https://pam.company.local
 SECRETS_INDEEDPAMAAPM_APPLICATIONTOKEN=<platform-injected-pam-token>
+SECRETS_INDEEDPAMAAPM_TOKEN_TRANSPORT=header
 SECRETS_INDEEDPAMAAPM_DEFAULTACCOUNTPATH=default/path
 ```
 
@@ -216,13 +217,20 @@ injected by the platform and cannot be resolved through the same PAM resolver.
 - `LOG_SINK=file` adds a second JSON sink at `LOG_FILE_PATH`; use it only when
   a collector, sidecar, syslog driver, ELK/OpenSearch route or equivalent
   platform log route picks up the file.
+- Production HA examples use `LOG_SINK=file`, `/app/logs/idmmw.log` and the
+  `logging` compose profile sidecar as the second operational delivery route.
 
 ## Acceptance checklist
 
 - `docker compose config` succeeds for the selected compose/env pair.
 - DB init or migration one-shot completes successfully.
 - App container starts without restart loops.
-- `/health` returns success.
-- `/metrics` exposes Prometheus metrics.
+- `/health` returns public liveness success.
+- `/ready` returns dependency readiness for DB, Redis and Kafka on the internal
+  route.
+- `/metrics` exposes Prometheus metrics on the internal route, or requires
+  integration HMAC when `METRICS_PUBLIC_ENABLED=false`.
 - Admin UI is reachable when `ADMIN_UI_ENABLED=true`.
+- `/webhooks/avanpost` and `/idm/*` reject unsigned requests when
+  `INTEGRATION_AUTH_ENABLED=true`.
 - No real secrets are stored in committed env templates.

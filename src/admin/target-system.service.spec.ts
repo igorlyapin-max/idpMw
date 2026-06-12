@@ -57,12 +57,17 @@ describe('TargetSystemService', () => {
   });
 
   describe('findAll', () => {
-    it('should return parsed configs', async () => {
+    it('should return redacted parsed configs', async () => {
       prisma.targetSystem.findMany.mockResolvedValue([
-        { id: '1', name: 'z1', type: 'zabbix', config: '{"a":1}' },
+        {
+          id: '1',
+          name: 'z1',
+          type: 'zabbix',
+          config: '{"a":1,"apiToken":"secret"}',
+        },
       ]);
       const result = await service.findAll({});
-      expect(result[0].config).toEqual({ a: 1 });
+      expect(result[0].config).toEqual({ a: 1, apiToken: '***' });
     });
   });
 
@@ -112,9 +117,33 @@ describe('TargetSystemService', () => {
 
   describe('update', () => {
     it('should serialize config when provided', async () => {
+      prisma.targetSystem.findUnique.mockResolvedValue({
+        id: '1',
+        config: '{"password":"old","url":"http://old"}',
+      });
       prisma.targetSystem.update.mockResolvedValue({ id: '1' });
       await service.update('1', { config: { url: 'http://z' } });
-      expect(jsonHelper.toJson).toHaveBeenCalledWith({ url: 'http://z' });
+      expect(jsonHelper.toJson).toHaveBeenCalledWith({
+        password: 'old',
+        url: 'http://z',
+      });
+    });
+
+    it('should preserve current secret when update sends masked placeholder', async () => {
+      prisma.targetSystem.findUnique.mockResolvedValue({
+        id: '1',
+        config: '{"password":"old-secret","url":"http://old"}',
+      });
+      prisma.targetSystem.update.mockResolvedValue({ id: '1' });
+
+      await service.update('1', {
+        config: { password: '***', url: 'http://new' },
+      });
+
+      expect(jsonHelper.toJson).toHaveBeenCalledWith({
+        password: 'old-secret',
+        url: 'http://new',
+      });
     });
 
     it('should map duplicate names to conflict', async () => {

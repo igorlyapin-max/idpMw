@@ -26,7 +26,7 @@ describe('AdminService', () => {
   };
   let kafkaProducer: { send: jest.Mock };
   let metrics: { processedLast5Minutes: jest.Mock };
-  let processing: { process: jest.Mock };
+  let processing: { processRetry: jest.Mock };
   let config: { get: jest.Mock };
 
   beforeEach(async () => {
@@ -52,7 +52,7 @@ describe('AdminService', () => {
         byTargetSystem: {},
       }),
     };
-    processing = { process: jest.fn().mockResolvedValue(undefined) };
+    processing = { processRetry: jest.fn().mockResolvedValue(undefined) };
     config = {
       get: jest.fn((key: string) => {
         if (key === 'KAFKA_ENABLED') return true;
@@ -121,13 +121,16 @@ describe('AdminService', () => {
 
     await service.retry('1');
 
-    expect(processing.process).toHaveBeenCalledWith({
-      eventId: 'e1',
-      operation: 'create',
-      targetSystem: 'zabbix',
-      payload: { username: 'jdoe' },
-    });
-    expect(dlq.resolve).toHaveBeenCalledWith('1');
+    expect(processing.processRetry).toHaveBeenCalledWith(
+      {
+        eventId: 'e1',
+        operation: 'create',
+        targetSystem: 'zabbix',
+        payload: { username: 'jdoe' },
+      },
+      '1',
+    );
+    expect(dlq.resolve).not.toHaveBeenCalled();
     expect(kafkaProducer.send).not.toHaveBeenCalled();
   });
 

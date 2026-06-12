@@ -1,7 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { AppModule } from '../src/app.module';
+
+const originalMockIdmEnabled = process.env['MOCK_IDM_ENABLED'];
+process.env['MOCK_IDM_ENABLED'] = 'true';
+
+const { AppModule } =
+  jest.requireActual<typeof import('../src/app.module')>('../src/app.module');
 
 interface MockIdmResponse {
   success: boolean;
@@ -43,5 +48,10 @@ describe('Mock IDM (e2e)', () => {
 
   afterAll(async () => {
     await app.close();
+    if (originalMockIdmEnabled === undefined) {
+      delete process.env['MOCK_IDM_ENABLED'];
+    } else {
+      process.env['MOCK_IDM_ENABLED'] = originalMockIdmEnabled;
+    }
   });
 });

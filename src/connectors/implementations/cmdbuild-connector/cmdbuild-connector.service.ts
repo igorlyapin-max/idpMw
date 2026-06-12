@@ -268,7 +268,8 @@ export class CmdbuildConnectorService implements Connector {
     userId: string,
     add: boolean,
   ): Promise<unknown> {
-    const user = await this.getEntity(config, `/users/${userId}`);
+    const safeUserId = this.pathSegment(userId, 'userId');
+    const user = await this.getEntity(config, `/users/${safeUserId}`);
     const currentGroups = Array.isArray(user['userGroups'])
       ? (user['userGroups'] as Array<Record<string, unknown>>)
       : [];
@@ -284,7 +285,7 @@ export class CmdbuildConnectorService implements Connector {
       );
     }
 
-    return this.call(config, 'PUT', `/users/${userId}`, {
+    return this.call(config, 'PUT', `/users/${safeUserId}`, {
       ...user,
       userGroups: nextGroups.map((group) => ({ _id: group['_id'] })),
     });
@@ -355,23 +356,27 @@ export class CmdbuildConnectorService implements Connector {
 
       case 'user.update':
       case 'user.addAttributes':
-        return this.putMerged(config, `/users/${id}`, data);
+        return this.putMerged(config, `/users/${this.pathSegment(id, 'id')}`, data);
 
       case 'user.removeAttributes':
         return this.putMerged(
           config,
-          `/users/${id}`,
+          `/users/${this.pathSegment(id, 'id')}`,
           Object.fromEntries(Object.keys(data).map((key) => [key, null])),
         );
 
       case 'user.enable':
       case 'user.unlock':
-        return this.putMerged(config, `/users/${id}`, { active: true });
+        return this.putMerged(config, `/users/${this.pathSegment(id, 'id')}`, {
+          active: true,
+        });
 
       case 'user.disable':
       case 'user.lock':
       case 'user.delete':
-        return this.putMerged(config, `/users/${id}`, { active: false });
+        return this.putMerged(config, `/users/${this.pathSegment(id, 'id')}`, {
+          active: false,
+        });
 
       case 'user.changePassword': {
         const password = this.firstQueryValue(
@@ -381,14 +386,18 @@ export class CmdbuildConnectorService implements Connector {
         if (!password) {
           throw new Error('Missing password for user.changePassword');
         }
-        return this.putMerged(config, `/users/${id}`, { password });
+        return this.putMerged(config, `/users/${this.pathSegment(id, 'id')}`, {
+          password,
+        });
       }
 
       case 'group.update':
-        return this.putMerged(config, `/roles/${id}`, data);
+        return this.putMerged(config, `/roles/${this.pathSegment(id, 'id')}`, data);
 
       case 'group.delete':
-        return this.putMerged(config, `/roles/${id}`, { active: false });
+        return this.putMerged(config, `/roles/${this.pathSegment(id, 'id')}`, {
+          active: false,
+        });
 
       case 'group.search':
         return this.searchRoles(
@@ -414,6 +423,26 @@ export class CmdbuildConnectorService implements Connector {
     return JSON.stringify(value);
   }
 
+  private pathSegment(value: unknown, name: string): string {
+    if (typeof value !== 'string' && typeof value !== 'number') {
+      throw new Error(`Missing ${name}`);
+    }
+    const text = String(value).trim();
+    if (
+      !text ||
+      text === '.' ||
+      text === '..' ||
+      text.includes('/') ||
+      text.includes('\\') ||
+      text.includes('?') ||
+      text.includes('#') ||
+      /%2f|%5c/i.test(text)
+    ) {
+      throw new Error(`Invalid CMDBuild path segment: ${name}`);
+    }
+    return encodeURIComponent(text);
+  }
+
   private buildRequest(
     config: CmdbuildConfig,
     operation: string,
@@ -427,13 +456,23 @@ export class CmdbuildConnectorService implements Connector {
         return { url: '/users', method: 'POST', body: data };
 
       case 'user.update':
-        return { url: `/users/${userId}`, method: 'PUT', body: data };
+        return {
+          url: `/users/${this.pathSegment(userId, 'id')}`,
+          method: 'PUT',
+          body: data,
+        };
 
       case 'user.delete':
-        return { url: `/users/${userId}`, method: 'DELETE' };
+        return {
+          url: `/users/${this.pathSegment(userId, 'id')}`,
+          method: 'DELETE',
+        };
 
       case 'user.get':
-        return { url: `/users/${userId}`, method: 'GET' };
+        return {
+          url: `/users/${this.pathSegment(userId, 'id')}`,
+          method: 'GET',
+        };
 
       case 'user.search':
         return {
@@ -450,7 +489,7 @@ export class CmdbuildConnectorService implements Connector {
       case 'user.enable':
       case 'user.unlock':
         return {
-          url: `/users/${userId}`,
+          url: `/users/${this.pathSegment(userId, 'id')}`,
           method: 'PUT',
           body: { active: true },
         };
@@ -458,7 +497,7 @@ export class CmdbuildConnectorService implements Connector {
       case 'user.disable':
       case 'user.lock':
         return {
-          url: `/users/${userId}`,
+          url: `/users/${this.pathSegment(userId, 'id')}`,
           method: 'PUT',
           body: { active: false },
         };
@@ -466,7 +505,7 @@ export class CmdbuildConnectorService implements Connector {
       case 'user.changePassword': {
         const newPass = data['newValue'] ?? data['password'];
         return {
-          url: `/users/${userId}/password`,
+          url: `/users/${this.pathSegment(userId, 'id')}/password`,
           method: 'POST',
           body: { password: newPass },
         };
@@ -492,11 +531,15 @@ export class CmdbuildConnectorService implements Connector {
         };
 
       case 'user.addAttributes':
-        return { url: `/users/${userId}`, method: 'PUT', body: data };
+        return {
+          url: `/users/${this.pathSegment(userId, 'id')}`,
+          method: 'PUT',
+          body: data,
+        };
 
       case 'user.removeAttributes':
         return {
-          url: `/users/${userId}`,
+          url: `/users/${this.pathSegment(userId, 'id')}`,
           method: 'PUT',
           body: Object.fromEntries(Object.keys(data).map((k) => [k, null])),
         };
@@ -505,13 +548,23 @@ export class CmdbuildConnectorService implements Connector {
         return { url: '/roles', method: 'POST', body: data };
 
       case 'group.update':
-        return { url: `/roles/${userId}`, method: 'PUT', body: data };
+        return {
+          url: `/roles/${this.pathSegment(userId, 'id')}`,
+          method: 'PUT',
+          body: data,
+        };
 
       case 'group.delete':
-        return { url: `/roles/${userId}`, method: 'DELETE' };
+        return {
+          url: `/roles/${this.pathSegment(userId, 'id')}`,
+          method: 'DELETE',
+        };
 
       case 'group.get':
-        return { url: `/roles/${userId}`, method: 'GET' };
+        return {
+          url: `/roles/${this.pathSegment(userId, 'id')}`,
+          method: 'GET',
+        };
 
       case 'group.search':
         return {

@@ -2,7 +2,6 @@ import { ConfigService } from '@nestjs/config';
 import { Kafka } from 'kafkajs';
 import { ProcessingService } from '../core/processing.service';
 import { KafkaProducerService } from './kafka-producer.service';
-import { DlqService } from '../core/dlq/dlq.service';
 import { KafkaConsumerService } from './kafka-consumer.service';
 
 jest.mock('kafkajs', () => ({
@@ -23,9 +22,8 @@ type ConsumerRunArgs = {
 };
 
 function createService(values: Record<string, unknown>) {
-  const processing = { process: jest.fn() };
+  const processing = { process: jest.fn(), processRetry: jest.fn() };
   const producer = { send: jest.fn() };
-  const dlq = { resolve: jest.fn() };
   const config = {
     get: jest.fn((key: string) => values[key]),
   } as unknown as ConfigService;
@@ -33,9 +31,8 @@ function createService(values: Record<string, unknown>) {
     config,
     processing as unknown as ProcessingService,
     producer as unknown as KafkaProducerService,
-    dlq as unknown as DlqService,
   );
-  return { service, processing, producer, dlq };
+  return { service, processing, producer };
 }
 
 describe('KafkaConsumerService', () => {
@@ -91,14 +88,14 @@ describe('KafkaConsumerService', () => {
   });
 
   it('processes Kafka messages and emits success status', async () => {
-    const { service, processing, producer, dlq } = createService({
+    const { service, processing, producer } = createService({
       KAFKA_ENABLED: true,
       KAFKA_BROKERS: '127.0.0.1:9092',
       KAFKA_TOPIC_DLQ_RETRY: 'idmmw.test.dlq.retry',
       KAFKA_TOPIC_EVENTS_OUT: 'idmmw.test.events.out',
       IDMMW_PROCESSING_MODE: 'sync',
     });
-    processing.process.mockResolvedValue(undefined);
+    processing.processRetry.mockResolvedValue(undefined);
 
     await service.onModuleInit();
     const runCalls = consumerRun.mock.calls as Array<[ConsumerRunArgs]>;
@@ -119,10 +116,10 @@ describe('KafkaConsumerService', () => {
       },
     });
 
-    expect(processing.process).toHaveBeenCalledWith(
+    expect(processing.processRetry).toHaveBeenCalledWith(
       expect.objectContaining({ eventId: 'e1' }),
+      'dlq-1',
     );
-    expect(dlq.resolve).toHaveBeenCalledWith('dlq-1');
     expect(producer.send).toHaveBeenCalledWith(
       'idmmw.test.events.out',
       expect.objectContaining({ eventId: 'e1', status: 'success' }),

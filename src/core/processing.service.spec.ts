@@ -11,7 +11,7 @@ describe('ProcessingService', () => {
   let registry: { get: jest.Mock };
   let retry: { execute: jest.Mock };
   let retryPolicy: { forTarget: jest.Mock };
-  let dlq: { add: jest.Mock };
+  let dlq: { add: jest.Mock; resolve: jest.Mock; markRetryFailed: jest.Mock };
   let metrics: { recordEvent: jest.Mock; recordConnectorError: jest.Mock };
 
   beforeEach(async () => {
@@ -26,7 +26,11 @@ describe('ProcessingService', () => {
         dlqLeaseSeconds: 300,
       }),
     };
-    dlq = { add: jest.fn() };
+    dlq = {
+      add: jest.fn(),
+      resolve: jest.fn(),
+      markRetryFailed: jest.fn(),
+    };
     metrics = { recordEvent: jest.fn(), recordConnectorError: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -156,5 +160,53 @@ describe('ProcessingService', () => {
     });
     expect(metrics.recordEvent).toHaveBeenCalledWith('success', 'fake');
     expect(dlq.add).not.toHaveBeenCalled();
+  });
+
+  it('should retry an existing DLQ item without adding a duplicate', async () => {
+    const connector = {
+      execute: jest.fn().mockResolvedValue({ success: true }),
+    };
+    registry.get.mockReturnValue(connector);
+    retry.execute.mockImplementation(async (fn: unknown) =>
+      (fn as () => Promise<unknown>)(),
+    );
+
+    await service.processRetry(
+      {
+        eventId: 'e-retry',
+        operation: 'user.create',
+        targetSystem: 'fake',
+        payload: {},
+      },
+      'dlq-1',
+    );
+
+    expect(dlq.add).not.toHaveBeenCalled();
+    expect(dlq.resolve).toHaveBeenCalledWith('dlq-1');
+  });
+
+  it('should return failed DLQ retry to pending without adding a duplicate', async () => {
+    const connector = {
+      execute: jest.fn().mockRejectedValue(new Error('retry failed')),
+    };
+    registry.get.mockReturnValue(connector);
+    retry.execute.mockImplementation(async (fn: unknown) =>
+      (fn as () => Promise<unknown>)(),
+    );
+
+    await expect(
+      service.processRetry(
+        {
+          eventId: 'e-retry',
+          operation: 'user.create',
+          targetSystem: 'fake',
+          payload: {},
+        },
+        'dlq-1',
+      ),
+    ).rejects.toThrow('retry failed');
+
+    expect(dlq.add).not.toHaveBeenCalled();
+    expect(dlq.markRetryFailed).toHaveBeenCalledWith('dlq-1', 'retry failed');
   });
 });

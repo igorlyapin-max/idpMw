@@ -63,6 +63,15 @@ export const appConfigSchema = z
     KAFKA_TLS_SERVER_NAME: z.string().optional(),
     IDMMW_PROCESSING_MODE: z.enum(['sync', 'async']).default('sync'),
     DLQ_RETRY_LEASE_SECONDS: z.string().transform(Number).default(300),
+    INTEGRATION_AUTH_ENABLED: z
+      .string()
+      .transform((v) => v === 'true')
+      .default(false),
+    INTEGRATION_AUTH_SECRET: z.string().optional(),
+    INTEGRATION_AUTH_ALLOWED_CLOCK_SKEW_SECONDS: z
+      .string()
+      .transform(Number)
+      .default(300),
 
     DB_CONNECTOR_ENABLED: z
       .string()
@@ -95,6 +104,7 @@ export const appConfigSchema = z
       .transform((v) => v === 'true')
       .default(false),
     MOCK_IDM_PORT: z.string().transform(Number).default(5100),
+    MOCK_IDM_MIDDLEWARE_URL: z.string().optional(),
 
     ADMIN_UI_ENABLED: z
       .string()
@@ -126,6 +136,7 @@ export const appConfigSchema = z
     ADMIN_AUTH_SSO_USER_HEADER: z.string().default('x-authenticated-user'),
     ADMIN_AUTH_SSO_GROUPS_HEADER: z.string().default('x-authenticated-groups'),
     ADMIN_AUTH_SSO_GROUPS_DELIMITER: z.string().default(','),
+    ADMIN_AUTH_TRUSTED_PROXY_CIDRS: z.string().optional(),
     HTTP_TLS_ENABLED: z
       .string()
       .transform((v) => v === 'true')
@@ -142,6 +153,9 @@ export const appConfigSchema = z
     HTTP_TLS_REQUEST_CLIENT_CERT: z.string().optional(),
 
     SECRETS_PROVIDER: z.enum(['None', 'IndeedPamAapm']).default('None'),
+    SECRETS_INDEEDPAMAAPM_TOKEN_TRANSPORT: z
+      .enum(['header', 'query'])
+      .default('header'),
     ENCRYPTION_ENABLED: z
       .string()
       .transform((v) => v === 'true')
@@ -168,6 +182,15 @@ export const appConfigSchema = z
 
     LOG_SINK: z.enum(['stdout', 'file']).default('stdout'),
     LOG_FILE_PATH: z.string().default('/tmp/idmmw.log'),
+    METRICS_PUBLIC_ENABLED: z
+      .string()
+      .transform((v) => v === 'true')
+      .default(true),
+    STATIC_CONNECTOR_ALLOWLIST: z.string().optional(),
+    TARGET_SYSTEM_REGISTRY_REFRESH_SECONDS: z
+      .string()
+      .transform(Number)
+      .default(10),
   })
   .passthrough()
   .superRefine((config, ctx) => {
@@ -177,6 +200,29 @@ export const appConfigSchema = z
         path: ['IDMMW_PROCESSING_MODE'],
         message:
           'IDMMW_PROCESSING_MODE=async requires KAFKA_ENABLED=true and reachable Kafka brokers',
+      });
+    }
+    if (config.NODE_ENV === 'production' && config.MOCK_IDM_ENABLED) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['MOCK_IDM_ENABLED'],
+        message: 'MOCK_IDM_ENABLED=true is not allowed in production',
+      });
+    }
+    if (config.INTEGRATION_AUTH_ENABLED && !config.INTEGRATION_AUTH_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['INTEGRATION_AUTH_SECRET'],
+        message:
+          'INTEGRATION_AUTH_SECRET is required when INTEGRATION_AUTH_ENABLED=true',
+      });
+    }
+    if (!config.METRICS_PUBLIC_ENABLED && !config.INTEGRATION_AUTH_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['INTEGRATION_AUTH_SECRET'],
+        message:
+          'INTEGRATION_AUTH_SECRET is required when METRICS_PUBLIC_ENABLED=false',
       });
     }
     if (config.ADMIN_AUTH_ENABLED) {
@@ -211,6 +257,18 @@ export const appConfigSchema = z
           path: ['ADMIN_AUTH_ALLOWLIST'],
           message:
             'SSO admin auth requires ADMIN_AUTH_ALLOWLIST or ADMIN_AUTH_ALLOWED_GROUPS',
+        });
+      }
+      if (
+        (config.ADMIN_AUTH_MODE === 'sso' ||
+          config.ADMIN_AUTH_MODE === 'both') &&
+        !config.ADMIN_AUTH_TRUSTED_PROXY_CIDRS
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['ADMIN_AUTH_TRUSTED_PROXY_CIDRS'],
+          message:
+            'SSO admin auth requires ADMIN_AUTH_TRUSTED_PROXY_CIDRS to prevent spoofed SSO headers',
         });
       }
     }

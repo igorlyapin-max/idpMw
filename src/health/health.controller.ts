@@ -8,7 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../database/prisma.service';
 import { RedisIdempotencyStore } from '../core/idempotency/stores/redis-idempotency.store';
 
-@Controller('health')
+@Controller()
 export class HealthController {
   constructor(
     private readonly health: HealthCheckService,
@@ -18,9 +18,14 @@ export class HealthController {
     private readonly redisStore: RedisIdempotencyStore,
   ) {}
 
-  @Get()
-  @HealthCheck()
+  @Get('health')
   check() {
+    return { status: 'ok' };
+  }
+
+  @Get('ready')
+  @HealthCheck()
+  ready() {
     return this.health.check([
       () => this.prisma.pingCheck('database', this.prismaService),
       () => this.redisStore.healthCheck(),

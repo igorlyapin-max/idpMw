@@ -96,9 +96,12 @@ Production contract:
 - `ENCRYPTION_ENABLED=true`
 - `ADMIN_AUTH_ENABLED=true`
 - `HTTP_TLS_ENABLED=true` or equivalent trusted gateway TLS
+- `INTEGRATION_AUTH_ENABLED=true`
+- `METRICS_PUBLIC_ENABLED=false`
+- `STATIC_CONNECTOR_ALLOWLIST=`
 - `DebugLogging__Enabled=false`
 - `DebugLogging__Level=Basic`
-- `LOG_SINK=stdout` plus platform collector/sidecar/syslog/ELK/Kafka route
+- `LOG_SINK=file` plus stdout and collector/sidecar/syslog/ELK/Kafka route
 
 ## Scaling assumptions
 

@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { ConnectorRegistry } from './connector.registry';
 import { PrismaService } from '../database/prisma.service';
 import { JsonHelper } from '../database/json.helper';
@@ -20,7 +21,13 @@ type MockConnector = {
 
 describe('ConnectorRegistry', () => {
   let registry: ConnectorRegistry;
-  let prisma: { targetSystem: { findMany: jest.Mock } };
+  let prisma: {
+    targetSystem: {
+      findMany: jest.Mock;
+      count: jest.Mock;
+      aggregate: jest.Mock;
+    };
+  };
   let restConnector: MockConnector;
   let dbConnector: MockConnector;
   let zabbixConnector: MockConnector;
@@ -29,7 +36,13 @@ describe('ConnectorRegistry', () => {
   let passworkConnector: MockConnector;
 
   beforeEach(async () => {
-    prisma = { targetSystem: { findMany: jest.fn() } };
+    prisma = {
+      targetSystem: {
+        findMany: jest.fn(),
+        count: jest.fn().mockResolvedValue(0),
+        aggregate: jest.fn().mockResolvedValue({ _max: { updatedAt: null } }),
+      },
+    };
     restConnector = {
       name: 'rest',
       execute: jest.fn(),
@@ -68,6 +81,23 @@ describe('ConnectorRegistry', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ConnectorRegistry,
+        {
+          provide: ConfigService,
+          useValue: {
+            get: jest.fn((key: string) => {
+              if (key === 'STATIC_CONNECTOR_ALLOWLIST') {
+                return 'fake,zabbix,passwork';
+              }
+              if (key === 'TARGET_SYSTEM_REGISTRY_REFRESH_SECONDS') {
+                return 0;
+              }
+              if (key === 'NODE_ENV') {
+                return 'test';
+              }
+              return undefined;
+            }),
+          },
+        },
         { provide: PrismaService, useValue: prisma },
         { provide: JsonHelper, useValue: jsonHelper },
         { provide: RestConnectorService, useValue: restConnector },

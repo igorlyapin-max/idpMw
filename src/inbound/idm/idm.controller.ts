@@ -162,7 +162,7 @@ export class IdmController {
     params: Record<string, unknown>,
     syncMode?: SyncMode,
   ) {
-    const ts = await this.targetSystemService.findByName(name);
+    const config = await this.targetSystemService.findRawConfigByName(name);
     const connector = this.registry.get(name);
     if (!connector) {
       throw new NotFoundException(`Target system not found: ${name}`);
@@ -172,7 +172,7 @@ export class IdmController {
       operation,
       targetSystem: name,
       payload: {
-        ...(ts ? { config: ts.config } : {}),
+        ...(config ? { config } : {}),
         params,
       },
     };

@@ -1,7 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { IdempotencyService } from '../../core/idempotency/idempotency.service';
 import { DispatcherService } from '../../outbound/dispatcher.service';
-import { ProcessingService } from '../../core/processing.service';
+import {
+  ProcessingService,
+  isDurablyAcceptedError,
+} from '../../core/processing.service';
 import type { AvanpostWebhookDto } from './webhook.controller';
 
 export interface ProcessResult {
@@ -40,7 +43,7 @@ export class WebhookService {
     dto: AvanpostWebhookDto,
     isRead = false,
   ): Promise<ProcessResult> {
-    const idempotencyKey = `avanpost:${dto.eventId}`;
+    const idempotencyKey = `avanpost:${dto.targetSystem}:${dto.eventId}`;
 
     // Check if we already processed this eventId.
     // TTL = 3600 sec — duplicates within 1 hour are silently ignored.
@@ -73,6 +76,9 @@ export class WebhookService {
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.error(`Failed to process webhook ${dto.eventId}: ${msg}`);
+      if (!isDurablyAcceptedError(error)) {
+        await this.idempotency.release(idempotencyKey);
+      }
       throw error;
     }
   }

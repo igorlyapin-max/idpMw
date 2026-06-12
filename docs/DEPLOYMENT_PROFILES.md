@@ -173,6 +173,11 @@ REDIS_ENABLED=false
 ENCRYPTION_ENABLED=true
 ADMIN_AUTH_ENABLED=true
 HTTP_TLS_ENABLED=true
+INTEGRATION_AUTH_ENABLED=true
+METRICS_PUBLIC_ENABLED=false
+STATIC_CONNECTOR_ALLOWLIST=
+LOG_SINK=file
+LOG_FILE_PATH=/app/logs/idmmw.log
 ```
 
 Build image:
@@ -196,6 +201,9 @@ docker compose --env-file deploy/profiles/prod-ha-yugabyte.env \
 
 docker compose --env-file deploy/profiles/prod-ha-yugabyte.env \
   -f deploy/docker-compose.prod-ha.yml up -d idmmw
+
+docker compose --env-file deploy/profiles/prod-ha-yugabyte.env \
+  -f deploy/docker-compose.prod-ha.yml --profile logging up -d idmmw-log-forwarder
 ```
 
 For multiple workers, run the same image and env behind an external reverse
@@ -247,7 +255,11 @@ Production profiles must keep:
   `TargetSystem.config`.
 - `ADMIN_AUTH_ENABLED=true` for `/admin/*`.
 - `HTTP_TLS_ENABLED=true` or equivalent TLS termination at a trusted gateway.
+- `INTEGRATION_AUTH_ENABLED=true` for `/webhooks/*` and `/idm/*`.
+- `METRICS_PUBLIC_ENABLED=false` unless the metrics route is already isolated
+  by platform routing.
+- `STATIC_CONNECTOR_ALLOWLIST=` empty; use DB-backed TargetSystem routes.
 - `DebugLogging__Enabled=false` by default; use `Basic` or `Verbose` only for
   time-bound diagnostics.
-- stdout logging always enabled; add a collector/sidecar or file sink according
-  to the runtime platform.
+- stdout logging always enabled; prod-ha examples use `LOG_SINK=file` and the
+  compose `logging` profile sidecar as the second operational sink.

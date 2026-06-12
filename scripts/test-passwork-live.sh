@@ -10,6 +10,8 @@ PASSWORK_ADMIN_CREDENTIALS_FILE="${PASSWORK_ADMIN_CREDENTIALS_FILE:-../passwork/
 PORT="${PORT:-3213}"
 TARGET_SYSTEM="${PASSWORK_TARGET_SYSTEM:-passwork-local}"
 RUN_ID="${PASSWORK_LIVE_RUN_ID:-$(date +%Y%m%d%H%M%S)-$$}"
+PASSWORK_LIVE_CLEANUP="${PASSWORK_LIVE_CLEANUP:-always}"
+REPORT_PATH="${PASSWORK_LIVE_REPORT_PATH:-}"
 DB_PATH="${IDMMW_PASSWORK_DB_PATH:-/tmp/idmmw-passwork-${RUN_ID}.db}"
 DB_URL="file:${DB_PATH}"
 LOG_PATH="${IDMMW_PASSWORK_LOG_PATH:-/tmp/idmmw-passwork-${RUN_ID}.log}"
@@ -72,6 +74,46 @@ redact_file() {
   fi
 }
 
+keep_artifacts() {
+  [ "${IDMMW_LIVE_KEEP_ARTIFACTS:-false}" = "true" ] || [ "$PASSWORK_LIVE_CLEANUP" = "never" ]
+}
+
+write_report() {
+  if [ -z "$REPORT_PATH" ]; then
+    return 0
+  fi
+  REPORT_PATH="$REPORT_PATH" \
+    RUN_ID="$RUN_ID" \
+    TARGET_SYSTEM="$TARGET_SYSTEM" \
+    TEST_LOGIN="$TEST_LOGIN" \
+    TEST_EMAIL="$TEST_EMAIL" \
+    TEST_USER_ID="$TEST_USER_ID" \
+    TEST_GROUP="$TEST_GROUP" \
+    TEST_GROUP_UPDATED="$TEST_GROUP_UPDATED" \
+    TEST_GROUP_ID="$TEST_GROUP_ID" \
+    CLEANUP_MODE="$PASSWORK_LIVE_CLEANUP" \
+    node -e '
+const fs = require("fs");
+const report = {
+  runId: process.env.RUN_ID,
+  targetSystem: process.env.TARGET_SYSTEM,
+  type: "passwork",
+  cleanupMode: process.env.CLEANUP_MODE,
+  user: {
+    login: process.env.TEST_LOGIN,
+    email: process.env.TEST_EMAIL,
+    id: process.env.TEST_USER_ID || null,
+  },
+  group: {
+    name: process.env.TEST_GROUP,
+    updatedName: process.env.TEST_GROUP_UPDATED,
+    id: process.env.TEST_GROUP_ID || null,
+  },
+};
+fs.writeFileSync(process.env.REPORT_PATH, JSON.stringify(report, null, 2));
+'
+}
+
 cleanup_passwork_direct() {
   local method="$1"
   local path="$2"
@@ -87,10 +129,10 @@ cleanup_passwork_direct() {
 }
 
 cleanup() {
-  if [ -n "${TEST_GROUP_ID:-}" ]; then
+  if ! keep_artifacts && [ -n "${TEST_GROUP_ID:-}" ]; then
     cleanup_passwork_direct DELETE "/user-groups/${TEST_GROUP_ID}"
   fi
-  if [ -n "${TEST_USER_ID:-}" ]; then
+  if ! keep_artifacts && [ -n "${TEST_USER_ID:-}" ]; then
     cleanup_passwork_direct DELETE "/users/${TEST_USER_ID}"
   fi
   if [ -n "$APP_PID" ] && kill -0 "$APP_PID" >/dev/null 2>&1; then
@@ -544,10 +586,15 @@ webhook_json group.removeMember "$TMP_DIR/empty.json" "$TMP_DIR/group-member-par
 echo "[9/9] Syncing and deleting test Passwork data"
 printf '{"mode":"full"}' >"$TMP_DIR/sync-body.json"
 idm_json POST "/idm/${TARGET_SYSTEM}/sync" "$TMP_DIR/sync-body.json" "$TMP_DIR/sync.json" || fail "sync.full failed"
-webhook_json group.delete "$TMP_DIR/empty.json" "$TMP_DIR/group-id-params.json" "$TMP_DIR/group-delete.json" || fail "group.delete failed"
-TEST_GROUP_ID=""
-webhook_json user.delete "$TMP_DIR/empty.json" "$TMP_DIR/user-id-params.json" "$TMP_DIR/user-delete.json" || fail "user.delete failed"
-TEST_USER_ID=""
+write_report
+if keep_artifacts; then
+  echo "Keeping Passwork test user/group artifacts for manual verification"
+else
+  webhook_json group.delete "$TMP_DIR/empty.json" "$TMP_DIR/group-id-params.json" "$TMP_DIR/group-delete.json" || fail "group.delete failed"
+  TEST_GROUP_ID=""
+  webhook_json user.delete "$TMP_DIR/empty.json" "$TMP_DIR/user-id-params.json" "$TMP_DIR/user-delete.json" || fail "user.delete failed"
+  TEST_USER_ID=""
+fi
 idm_json DELETE "/admin/target-systems/${TARGET_SYSTEM_ID}" "" "$TMP_DIR/target-system-delete.json" || fail "TargetSystem delete failed"
 TARGET_SYSTEM_ID=""
 

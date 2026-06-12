@@ -14,13 +14,26 @@ describe('RestConnectorService', () => {
     service = module.get<RestConnectorService>(RestConnectorService);
   });
 
-  it('should return error for missing URL', async () => {
+  it('should return error for missing baseUrl', async () => {
     const result = await service.execute({
       operation: 'create',
       targetSystem: 'rest',
       payload: {},
     });
     expect(result.success).toBe(false);
-    expect(result.error).toContain('Missing target URL');
+    expect(result.error).toContain('Missing baseUrl');
+  });
+
+  it('should reject raw absolute payload paths', async () => {
+    const result = await service.execute({
+      operation: 'create',
+      targetSystem: 'rest',
+      payload: {
+        config: { baseUrl: 'https://api.example.local' },
+        path: 'https://evil.example.local',
+      },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('relative absolute path');
   });
 });

@@ -6,12 +6,12 @@ import { ProcessingService } from '../../core/processing.service';
 
 describe('WebhookService', () => {
   let service: WebhookService;
-  let idempotency: { checkAndLock: jest.Mock };
+  let idempotency: { checkAndLock: jest.Mock; release: jest.Mock };
   let dispatcher: { dispatch: jest.Mock };
   let processing: { processWithResult: jest.Mock };
 
   beforeEach(async () => {
-    idempotency = { checkAndLock: jest.fn() };
+    idempotency = { checkAndLock: jest.fn(), release: jest.fn() };
     dispatcher = { dispatch: jest.fn() };
     processing = { processWithResult: jest.fn() };
 
@@ -39,6 +39,10 @@ describe('WebhookService', () => {
     });
 
     expect(result).toEqual({ processed: true });
+    expect(idempotency.checkAndLock).toHaveBeenCalledWith(
+      'avanpost:zabbix:e1',
+      3600,
+    );
     expect(dispatcher.dispatch).toHaveBeenCalled();
   });
 
@@ -90,5 +94,6 @@ describe('WebhookService', () => {
         payload: {},
       }),
     ).rejects.toThrow('dispatch fail');
+    expect(idempotency.release).toHaveBeenCalledWith('avanpost:zabbix:e1');
   });
 });

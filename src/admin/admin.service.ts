@@ -165,13 +165,15 @@ export class AdminService {
       return;
     }
 
-    await this.processing.process({
-      eventId: item.eventId,
-      operation: item.operation,
-      targetSystem: item.targetSystem,
-      payload,
-    });
-    await this.dlq.resolve(item.id);
+    await this.processing.processRetry(
+      {
+        eventId: item.eventId,
+        operation: item.operation,
+        targetSystem: item.targetSystem,
+        payload,
+      },
+      item.id,
+    );
   }
 
   private limit(

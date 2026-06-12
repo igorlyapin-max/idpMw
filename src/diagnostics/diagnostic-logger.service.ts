@@ -1,9 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { DebugLoggingLevel } from '../config/logging.config';
-
-const SENSITIVE_KEY_RE =
-  /(password|passwd|token|secret|authorization|cookie|apiKey|key|cert|ca|pem|walletPassword)$/i;
+import {
+  SECRET_REDACTION_CENSOR,
+  isSecretKey,
+} from '../security/secret-redaction';
 
 @Injectable()
 export class DiagnosticLoggerService {
@@ -67,8 +68,8 @@ export class DiagnosticLoggerService {
 
     const result: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value)) {
-      if (SENSITIVE_KEY_RE.test(key)) {
-        result[key] = '[REDACTED]';
+      if (isSecretKey(key)) {
+        result[key] = SECRET_REDACTION_CENSOR;
         continue;
       }
       if (!keepStructure && typeof item === 'object' && item !== null) {

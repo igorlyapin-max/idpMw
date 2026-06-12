@@ -132,6 +132,14 @@ case "$PROFILE" in
     require_value "$FILE" ADMIN_AUTH_ENABLED true
     require_value "$FILE" ENCRYPTION_ENABLED true
     require_value "$FILE" HTTP_TLS_ENABLED true
+    require_value "$FILE" INTEGRATION_AUTH_ENABLED true
+    require_key "$FILE" INTEGRATION_AUTH_SECRET
+    require_value "$FILE" METRICS_PUBLIC_ENABLED false
+    require_value "$FILE" MOCK_IDM_ENABLED false
+    require_value "$FILE" STATIC_CONNECTOR_ALLOWLIST ""
+    require_value "$FILE" SECRETS_INDEEDPAMAAPM_TOKEN_TRANSPORT header
+    require_value "$FILE" LOG_SINK file
+    require_value "$FILE" LOG_FILE_PATH /app/logs/idmmw.log
     DATABASE_URL="${DATABASE_URL:-postgresql://idmmw:idmmw@localhost:5432/idmmw}" npx prisma validate --schema=prisma/schema.prisma
     ;;
   prod-ha-cockroach)
@@ -143,6 +151,14 @@ case "$PROFILE" in
     require_value "$FILE" ADMIN_AUTH_ENABLED true
     require_value "$FILE" ENCRYPTION_ENABLED true
     require_value "$FILE" HTTP_TLS_ENABLED true
+    require_value "$FILE" INTEGRATION_AUTH_ENABLED true
+    require_key "$FILE" INTEGRATION_AUTH_SECRET
+    require_value "$FILE" METRICS_PUBLIC_ENABLED false
+    require_value "$FILE" MOCK_IDM_ENABLED false
+    require_value "$FILE" STATIC_CONNECTOR_ALLOWLIST ""
+    require_value "$FILE" SECRETS_INDEEDPAMAAPM_TOKEN_TRANSPORT header
+    require_value "$FILE" LOG_SINK file
+    require_value "$FILE" LOG_FILE_PATH /app/logs/idmmw.log
     require_value "$FILE" PRISMA_SCHEMA prisma/schema.cockroach.prisma
     DATABASE_URL="${DATABASE_URL:-postgresql://root@localhost:26257/defaultdb?sslmode=disable}" npx prisma validate --schema=prisma/schema.cockroach.prisma
     ;;

@@ -10,6 +10,19 @@ services:
         'npx prisma migrate deploy --schema "$${PRISMA_SCHEMA:-prisma/schema.prisma}"',
       ]
     restart: 'no'
+    secrets:
+      - source: idmmw-http-crt
+        target: idmmw-http.crt
+      - source: idmmw-http-key
+        target: idmmw-http.key
+      - source: idmmw-client-ca-crt
+        target: idmmw-client-ca.crt
+      - source: kafka-ca-crt
+        target: kafka-ca.crt
+      - source: kafka-client-crt
+        target: kafka-client.crt
+      - source: kafka-client-key
+        target: kafka-client.key
     profiles:
       - migrate
 
@@ -19,6 +32,21 @@ services:
       - ${IDMMW_ENV_FILE:-./profiles/prod-ha-yugabyte.env.example}
     expose:
       - '3010'
+    volumes:
+      - idmmw_logs:/app/logs
+    secrets:
+      - source: idmmw-http-crt
+        target: idmmw-http.crt
+      - source: idmmw-http-key
+        target: idmmw-http.key
+      - source: idmmw-client-ca-crt
+        target: idmmw-client-ca.crt
+      - source: kafka-ca-crt
+        target: kafka-ca.crt
+      - source: kafka-client-crt
+        target: kafka-client.crt
+      - source: kafka-client-key
+        target: kafka-client.key
     restart: unless-stopped
     healthcheck:
       test:
@@ -26,9 +54,37 @@ services:
           'CMD',
           'node',
           '-e',
-          "fetch('http://127.0.0.1:3010/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+          "const http=require('http');const https=require('https');const tls=process.env.HTTP_TLS_ENABLED==='true';const req=(tls?https:http).request({host:'127.0.0.1',port:process.env.PORT||3010,path:'/health',rejectUnauthorized:false},(res)=>process.exit(res.statusCode>=200&&res.statusCode<400?0:1));req.on('error',()=>process.exit(1));req.end();",
         ]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 30s
+
+  idmmw-log-forwarder:
+    image: busybox:1.36
+    command: ['sh', '-c', 'touch /logs/idmmw.log && tail -F /logs/idmmw.log']
+    volumes:
+      - idmmw_logs:/logs:ro
+    depends_on:
+      - idmmw
+    restart: unless-stopped
+    profiles:
+      - logging
+
+volumes:
+  idmmw_logs:
+
+secrets:
+  idmmw-http-crt:
+    file: ${IDMMW_HTTP_CERT_FILE:-./secrets/idmmw-http.crt}
+  idmmw-http-key:
+    file: ${IDMMW_HTTP_KEY_FILE:-./secrets/idmmw-http.key}
+  idmmw-client-ca-crt:
+    file: ${IDMMW_CLIENT_CA_FILE:-./secrets/idmmw-client-ca.crt}
+  kafka-ca-crt:
+    file: ${KAFKA_CA_FILE:-./secrets/kafka-ca.crt}
+  kafka-client-crt:
+    file: ${KAFKA_CLIENT_CERT_FILE:-./secrets/kafka-client.crt}
+  kafka-client-key:
+    file: ${KAFKA_CLIENT_KEY_FILE:-./secrets/kafka-client.key}

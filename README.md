@@ -160,6 +160,11 @@ DB_CONNECTOR_ENABLED=false   # true для SQL-коннектора
 ADMIN_UI_ENABLED=true        # true для раздачи React UI
 ADMIN_AUTH_ENABLED=false     # true включает auth guard для /admin/*
 ADMIN_AUTH_MODE=local        # local | sso | both
+ADMIN_AUTH_TRUSTED_PROXY_CIDRS=127.0.0.1/32 # обязательно для SSO modes
+INTEGRATION_AUTH_ENABLED=false # true включает HMAC auth для /webhooks/* и /idm/*
+INTEGRATION_AUTH_SECRET=      # HMAC secret; обязателен, если auth включен
+METRICS_PUBLIC_ENABLED=true   # false закрывает /metrics тем же HMAC auth
+STATIC_CONNECTOR_ALLOWLIST=fake # direct static routes; prod-ha оставляет пустым
 DebugLogging__Enabled=false  # true для diagnostic logging
 DebugLogging__Level=Basic    # Basic | Verbose
 LOG_SINK=stdout              # stdout | file
@@ -328,7 +333,8 @@ Detailed profile contracts and commands:
 
 | Метод  | Путь                               | Описание                                          |
 | ------ | ---------------------------------- | ------------------------------------------------- |
-| GET    | `/health`                          | Health check: DB ping + Redis/Kafka config state  |
+| GET    | `/health`                          | Liveness без внутренней топологии                 |
+| GET    | `/ready`                           | Readiness: DB, Redis и Kafka runtime state        |
 | POST   | `/webhooks/avanpost`               | Приём событий от Avanpost IDM                     |
 | GET    | `/idm/target-systems`              | IDM-facing каталог включённых целевых систем      |
 | GET    | `/idm/target-systems/:name`        | IDM-facing карточка целевой системы               |
@@ -359,8 +365,10 @@ Detailed profile contracts and commands:
 
 Когда `ADMIN_AUTH_ENABLED=true`, все `/admin/*` endpoints требуют admin session.
 State-changing запросы (`POST`, `PATCH`, `DELETE`) должны передавать
-`X-CSRF-Token` из `/auth/session` или ответа login. `/health`, `/metrics`,
-`/webhooks/avanpost` и `/idm/*` не блокируются Admin UI auth.
+`X-CSRF-Token` из `/auth/session` или ответа login. `/webhooks/avanpost` и
+`/idm/*` защищаются отдельным HMAC-контрактом при
+`INTEGRATION_AUTH_ENABLED=true`: `X-IDMMW-Timestamp` и `X-IDMMW-Signature`.
+`/metrics` публичен только при `METRICS_PUBLIC_ENABLED=true`.
 
 ## Mock IDM (dev/test)
 
@@ -439,7 +447,7 @@ tail -f /tmp/idmmw.log
 ### Redis недоступен
 
 - При `REDIS_ENABLED=false` используется PostgreSQL `IdempotencyKey`.
-- При `REDIS_ENABLED=true` startup подключается к `REDIS_HOST:REDIS_PORT`; если Redis недоступен, startup/health падают.
+- При `REDIS_ENABLED=true` startup подключается к `REDIS_HOST:REDIS_PORT`; если Redis недоступен, startup/readiness падают.
 - Для локального стенда live smoke ожидает Redis на `127.0.0.1:16379`.
 
 ### Diagnostic logging

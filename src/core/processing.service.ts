@@ -6,6 +6,21 @@ import { DlqService } from './dlq/dlq.service';
 import { MetricsService } from '../metrics/metrics.service';
 import type { ConnectorResult } from '../connectors/connector.interface';
 
+export class ProcessingFailureError extends Error {
+  constructor(
+    message: string,
+    readonly durableAccepted: boolean,
+    readonly cause?: unknown,
+  ) {
+    super(message);
+    this.name = 'ProcessingFailureError';
+  }
+}
+
+export function isDurablyAcceptedError(error: unknown): boolean {
+  return error instanceof ProcessingFailureError && error.durableAccepted;
+}
+
 /**
  * Payload handed from DispatcherService to ProcessingService.
  *
@@ -51,6 +66,54 @@ export class ProcessingService {
   ) {}
 
   async process(dto: ProcessingPayload): Promise<void> {
+    try {
+      await this.executeWithRetry(dto);
+      this.logger.log(`Processing succeeded for event ${dto.eventId}`);
+      this.metrics.recordEvent('success', dto.targetSystem);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Processing failed for event ${dto.eventId}: ${msg}`);
+      this.metrics.recordEvent('failed', dto.targetSystem);
+
+      try {
+        await this.dlq.add({
+          eventId: dto.eventId,
+          operation: dto.operation,
+          targetSystem: dto.targetSystem,
+          payload: dto.payload,
+          error: msg,
+          retryCount: (await this.retryPolicy.forTarget(dto.targetSystem))
+            .maxRetries,
+        });
+      } catch (dlqError: unknown) {
+        const dlqMsg =
+          dlqError instanceof Error ? dlqError.message : String(dlqError);
+        throw new ProcessingFailureError(
+          `Processing failed before durable DLQ acceptance: ${dlqMsg}`,
+          false,
+          error,
+        );
+      }
+      throw new ProcessingFailureError(msg, true, error);
+    }
+  }
+
+  async processRetry(dto: ProcessingPayload, dlqItemId: string): Promise<void> {
+    try {
+      await this.executeWithRetry(dto);
+      this.logger.log(`DLQ retry succeeded for event ${dto.eventId}`);
+      this.metrics.recordEvent('success', dto.targetSystem);
+      await this.dlq.resolve(dlqItemId);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`DLQ retry failed for event ${dto.eventId}: ${msg}`);
+      this.metrics.recordEvent('failed', dto.targetSystem);
+      await this.dlq.markRetryFailed(dlqItemId, msg);
+      throw error;
+    }
+  }
+
+  private async executeWithRetry(dto: ProcessingPayload): Promise<void> {
     const connector = this.registry.get(dto.targetSystem);
     if (!connector) {
       this.logger.error(
@@ -60,36 +123,18 @@ export class ProcessingService {
     }
 
     const retryPolicy = await this.retryPolicy.forTarget(dto.targetSystem);
-    try {
-      const result = await this.retry.execute(
-        () =>
-          connector.execute({
-            operation: dto.operation,
-            targetSystem: dto.targetSystem,
-            payload: dto.payload,
-          }),
-        retryPolicy,
-      );
-      if (!result.success) {
-        this.metrics.recordConnectorError(dto.targetSystem, dto.operation);
-        throw new Error(result.error ?? 'Connector returned failure');
-      }
-      this.logger.log(`Processing succeeded for event ${dto.eventId}`);
-      this.metrics.recordEvent('success', dto.targetSystem);
-    } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Processing failed for event ${dto.eventId}: ${msg}`);
-      this.metrics.recordEvent('failed', dto.targetSystem);
-
-      await this.dlq.add({
-        eventId: dto.eventId,
-        operation: dto.operation,
-        targetSystem: dto.targetSystem,
-        payload: dto.payload,
-        error: msg,
-        retryCount: retryPolicy.maxRetries,
-      });
-      throw error;
+    const result = await this.retry.execute(
+      () =>
+        connector.execute({
+          operation: dto.operation,
+          targetSystem: dto.targetSystem,
+          payload: dto.payload,
+        }),
+      retryPolicy,
+    );
+    if (!result.success) {
+      this.metrics.recordConnectorError(dto.targetSystem, dto.operation);
+      throw new Error(result.error ?? 'Connector returned failure');
     }
   }
 

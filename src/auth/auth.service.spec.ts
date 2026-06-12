@@ -34,7 +34,11 @@ function response(): Response & { cookieHeader?: string } {
 }
 
 function request(headers: Record<string, string> = {}): Request {
-  return { headers } as unknown as Request;
+  return {
+    headers,
+    ip: '127.0.0.1',
+    socket: { remoteAddress: '127.0.0.1' },
+  } as unknown as Request;
 }
 
 describe('AuthService', () => {
@@ -83,6 +87,7 @@ describe('AuthService', () => {
         ADMIN_AUTH_LOCAL_USERNAME: undefined,
         ADMIN_AUTH_LOCAL_PASSWORD: undefined,
         ADMIN_AUTH_ALLOWED_GROUPS: 'idmmw-admins',
+        ADMIN_AUTH_TRUSTED_PROXY_CIDRS: '127.0.0.1/32',
       }),
     );
     const res = response();

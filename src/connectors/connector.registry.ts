@@ -1,4 +1,10 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   Connector,
   ConnectorPayload,
@@ -75,16 +81,20 @@ import { JsonHelper } from '../database/json.helper';
  *  The ZabbixConnectorService reads payload.config and performs the API call.
  */
 @Injectable()
-export class ConnectorRegistry implements OnModuleInit {
+export class ConnectorRegistry implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ConnectorRegistry.name);
 
   /** All resolvable connectors: static + dynamic proxies. Key = name or DB row name. */
-  private readonly connectors = new Map<string, Connector>();
+  private connectors = new Map<string, Connector>();
 
   /** Blueprint connectors registered from code. Key = connector type (e.g. 'zabbix'). */
   private readonly staticConnectors = new Map<string, Connector>();
+  private refreshTimer: NodeJS.Timeout | undefined;
+  private lastRegistryVersion = '';
+  private reloadInFlight: Promise<void> | undefined;
 
   constructor(
+    private readonly config: ConfigService,
     private readonly prisma: PrismaService,
     private readonly jsonHelper: JsonHelper,
     private readonly restConnector: RestConnectorService,
@@ -106,6 +116,13 @@ export class ConnectorRegistry implements OnModuleInit {
   /** Load dynamic proxies from DB on application startup. */
   async onModuleInit(): Promise<void> {
     await this.reload();
+    this.startPolling();
+  }
+
+  onModuleDestroy(): void {
+    if (this.refreshTimer) {
+      clearInterval(this.refreshTimer);
+    }
   }
 
   /**
@@ -119,11 +136,25 @@ export class ConnectorRegistry implements OnModuleInit {
    * without restarting the application.
    */
   async reload(): Promise<void> {
-    this.connectors.clear();
+    if (this.reloadInFlight) {
+      return this.reloadInFlight;
+    }
 
-    // Always keep static connectors available (legacy fallback).
+    this.reloadInFlight = this.reloadInternal().finally(() => {
+      this.reloadInFlight = undefined;
+    });
+    return this.reloadInFlight;
+  }
+
+  private async reloadInternal(): Promise<void> {
+    const nextConnectors = new Map<string, Connector>();
+
+    // Keep static connectors only when explicitly allowed.
+    const staticAllowlist = this.staticConnectorAllowlist();
     for (const [name, connector] of this.staticConnectors) {
-      this.connectors.set(name, connector);
+      if (staticAllowlist.has(name)) {
+        nextConnectors.set(name, connector);
+      }
     }
 
     // Load enabled TargetSystem rows from DB and create proxies.
@@ -136,10 +167,13 @@ export class ConnectorRegistry implements OnModuleInit {
         this.jsonHelper.fromJson<Record<string, unknown>>(ts.config) ?? {};
       const proxy = this.createProxy(ts.type, ts.name, config);
       if (proxy) {
-        this.connectors.set(ts.name, proxy);
+        nextConnectors.set(ts.name, proxy);
         this.logger.log(`Registered target system: ${ts.name} (${ts.type})`);
       }
     }
+
+    this.connectors = nextConnectors;
+    this.lastRegistryVersion = await this.registryVersion();
   }
 
   /**
@@ -175,6 +209,57 @@ export class ConnectorRegistry implements OnModuleInit {
 
   private registerStatic(connector: Connector): void {
     this.staticConnectors.set(connector.name, connector);
+  }
+
+  private staticConnectorAllowlist(): Set<string> {
+    const configured = this.config.get<string>('STATIC_CONNECTOR_ALLOWLIST');
+    if (configured !== undefined) {
+      return new Set(
+        configured
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean),
+      );
+    }
+
+    return this.config.get<string>('NODE_ENV') === 'production'
+      ? new Set()
+      : new Set(['fake']);
+  }
+
+  private startPolling(): void {
+    const seconds =
+      this.config.get<number>('TARGET_SYSTEM_REGISTRY_REFRESH_SECONDS') ?? 10;
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      return;
+    }
+
+    this.refreshTimer = setInterval(() => {
+      void this.reloadIfChanged();
+    }, seconds * 1000);
+    this.refreshTimer.unref?.();
+  }
+
+  private async reloadIfChanged(): Promise<void> {
+    try {
+      const version = await this.registryVersion();
+      if (version !== this.lastRegistryVersion) {
+        await this.reload();
+      }
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Target system registry refresh failed: ${msg}`);
+    }
+  }
+
+  private async registryVersion(): Promise<string> {
+    const [count, aggregate] = await Promise.all([
+      this.prisma.targetSystem.count(),
+      this.prisma.targetSystem.aggregate({
+        _max: { updatedAt: true },
+      }),
+    ]);
+    return `${count}:${aggregate._max.updatedAt?.toISOString() ?? 'none'}`;
   }
 
   /**

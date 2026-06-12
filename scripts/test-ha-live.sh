@@ -49,7 +49,7 @@ stop_app() {
 
 cleanup() {
   stop_app
-  docker exec "$REDIS_CONTAINER" redis-cli DEL "avanpost:idmmw-ha-redis-${RUN_ID}" "avanpost:idmmw-ha-async-${RUN_ID}" >/dev/null 2>&1 || true
+  docker exec "$REDIS_CONTAINER" redis-cli DEL "avanpost:fake:idmmw-ha-redis-${RUN_ID}" "avanpost:fake:idmmw-ha-async-${RUN_ID}" >/dev/null 2>&1 || true
   rm -f "$DB_PATH" "${DB_PATH}-journal" "$LOG_PATH" "$STDOUT_PATH"
   restore_prisma_client
 }
@@ -156,14 +156,14 @@ npm run build >/dev/null
 
 echo "[5/8] Starting sync mode with real Redis and Kafka"
 start_app sync
-curl -fsS "http://127.0.0.1:${PORT}/health" | grep -q '"redis"'
+curl -fsS "http://127.0.0.1:${PORT}/ready" | grep -q '"redis"'
 
 echo "[6/8] Verifying Redis idempotency against live Redis"
 REDIS_EVENT_ID="idmmw-ha-redis-${RUN_ID}"
 post_webhook "$REDIS_EVENT_ID" | grep -q '"processed":true'
 post_webhook "$REDIS_EVENT_ID" | grep -q '"processed":false'
-docker exec "$REDIS_CONTAINER" redis-cli GET "avanpost:${REDIS_EVENT_ID}" | grep -q '1'
-TTL_VALUE="$(docker exec "$REDIS_CONTAINER" redis-cli TTL "avanpost:${REDIS_EVENT_ID}")"
+docker exec "$REDIS_CONTAINER" redis-cli GET "avanpost:fake:${REDIS_EVENT_ID}" | grep -q '1'
+TTL_VALUE="$(docker exec "$REDIS_CONTAINER" redis-cli TTL "avanpost:fake:${REDIS_EVENT_ID}")"
 if [ "$TTL_VALUE" -le 0 ]; then
   echo "Expected Redis idempotency key TTL to be positive, got $TTL_VALUE"
   exit 1
