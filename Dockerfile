@@ -50,6 +50,10 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3010
 
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates openssl \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY --from=backend-build /app/package.json /app/package-lock.json ./
 COPY --from=backend-build /app/node_modules ./node_modules
 COPY --from=backend-build /app/dist ./dist

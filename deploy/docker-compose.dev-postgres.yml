@@ -1,0 +1,67 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: ${POSTGRES_CONTAINER_NAME:-idmmw-dev-postgres}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-idmmw}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-idmmw_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-idmmw}
+    ports:
+      - '${POSTGRES_HOST_PORT:-5433}:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  idmmw-db-init:
+    image: ${IDMMW_IMAGE:-REPLACE_REGISTRY/idmmw:dev-postgres}
+    container_name: ${IDMMW_INIT_CONTAINER_NAME:-idmmw-dev-postgres-db-init}
+    env_file:
+      - ${IDMMW_ENV_FILE:-./profiles/dev-postgres.env.example}
+    command:
+      [
+        'npx',
+        'prisma',
+        'migrate',
+        'deploy',
+        '--schema=prisma/schema.prisma',
+      ]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - init
+
+  idmmw:
+    image: ${IDMMW_IMAGE:-REPLACE_REGISTRY/idmmw:dev-postgres}
+    container_name: ${IDMMW_CONTAINER_NAME:-idmmw-dev-postgres-app}
+    env_file:
+      - ${IDMMW_ENV_FILE:-./profiles/dev-postgres.env.example}
+    ports:
+      - '${IDMMW_HOST_PORT:-3010}:3010'
+    volumes:
+      - idmmw_logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3010/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  postgres_data:
+  idmmw_logs:

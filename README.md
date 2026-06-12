@@ -47,6 +47,25 @@ Backend доступен на `http://localhost:3010`.
 TLS для inbound API/Admin UI включается через `HTTP_TLS_ENABLED=true`; после
 этого endpoint доступен на `https://localhost:3010`.
 
+### Контейнерная поставка
+
+Для передачи unix-админам используйте готовые image-only compose/env профили,
+а не локальный `npm` workflow. Подробная инструкция по сборке и push образов,
+`.env`, PAM secret references, DB init/migrations и runtime checks:
+[docs/CONTAINER_DEPLOYMENT_ADMIN_GUIDE.md](docs/CONTAINER_DEPLOYMENT_ADMIN_GUIDE.md).
+
+Default DEV поставка:
+
+```bash
+cp deploy/profiles/dev-sqlite.env.example deploy/profiles/dev-sqlite.env
+# replace REPLACE_REGISTRY in deploy/profiles/dev-sqlite.env
+docker compose --env-file deploy/profiles/dev-sqlite.env \
+  -f deploy/docker-compose.dev-sqlite.yml \
+  --profile init run --rm idmmw-db-init
+docker compose --env-file deploy/profiles/dev-sqlite.env \
+  -f deploy/docker-compose.dev-sqlite.yml up -d idmmw
+```
+
 ### Сборка и запуск UI
 
 ```bash
@@ -293,6 +312,9 @@ npm run test:ha-live
 
 Deployment profiles for CI and rollout:
 
+- `dev-sqlite`: default administrator-facing DEV profile with prebuilt image
+  and SQLite volume.
+- `dev-postgres`: APP + PostgreSQL DEV profile with prebuilt app image.
 - `sqlite-test`: one worker, SQLite, no Kafka/Redis; used by CI smoke.
 - `prod-ha-yugabyte`: recommended production HA profile with external Kafka and
   YugabyteDB YSQL through the normal PostgreSQL Prisma schema.
@@ -487,6 +509,18 @@ POST /admin/target-systems
   "enabled": true
 }
 ```
+
+Локальный mutating smoke для тестового Passwork стенда:
+
+```bash
+npm run test:passwork-live
+```
+
+Скрипт читает `../passwork/url.passwork` и `../passwork/api.passwork`, стартует
+временный idmMw runtime и удаляет созданные тестовые user/group в cleanup. Для
+локального стенда поддержан fallback через
+`../passwork/passwork-admin-credentials.txt`, если token-файл не является
+действующей Passwork-сессией.
 
 Поддерживаемые типы: `zabbix`, `cmdbuild`, `passwork`, `rest`, `db`, `fake`.
 

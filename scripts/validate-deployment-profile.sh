@@ -7,13 +7,19 @@ cd "$ROOT_DIR"
 PROFILE="${1:-}"
 
 usage() {
-  echo "Usage: $0 sqlite-test|prod-ha-yugabyte|prod-ha-cockroach"
+  echo "Usage: $0 sqlite-test|dev-sqlite|dev-postgres|prod-ha-yugabyte|prod-ha-cockroach"
 }
 
 profile_file() {
   case "$PROFILE" in
     sqlite-test)
       echo "deploy/profiles/sqlite-test.env.example"
+      ;;
+    dev-sqlite)
+      echo "deploy/profiles/dev-sqlite.env.example"
+      ;;
+    dev-postgres)
+      echo "deploy/profiles/dev-postgres.env.example"
       ;;
     prod-ha-yugabyte)
       echo "deploy/profiles/prod-ha-yugabyte.env.example"
@@ -64,7 +70,7 @@ require_value() {
 
 validate_common_keys() {
   local file="$1"
-  for key in NODE_ENV PORT DATABASE_PROVIDER DATABASE_URL LIGHTWEIGHT_MODE IDMMW_PROCESSING_MODE KAFKA_ENABLED REDIS_ENABLED ADMIN_UI_ENABLED MOCK_IDM_ENABLED DebugLogging__Enabled DebugLogging__Level LOG_SINK ENCRYPTION_ENABLED; do
+  for key in NODE_ENV PORT DATABASE_PROVIDER DATABASE_URL LIGHTWEIGHT_MODE IDMMW_PROCESSING_MODE KAFKA_ENABLED REDIS_ENABLED ADMIN_UI_ENABLED ADMIN_UI_SERVE_STATIC ADMIN_AUTH_ENABLED HTTP_TLS_ENABLED MOCK_IDM_ENABLED DebugLogging__Enabled DebugLogging__Level LOG_SINK ENCRYPTION_ENABLED; do
     require_key "$file" "$key"
   done
 }
@@ -81,6 +87,41 @@ case "$PROFILE" in
     require_value "$FILE" REDIS_ENABLED false
     require_value "$FILE" ENCRYPTION_ENABLED false
     DATABASE_URL="file:/tmp/idmmw-profile-validate.db" npx prisma validate --schema=prisma/schema.sqlite.prisma
+    ;;
+  dev-sqlite)
+    require_value "$FILE" NODE_ENV production
+    require_value "$FILE" DATABASE_PROVIDER sqlite
+    require_value "$FILE" LIGHTWEIGHT_MODE true
+    require_value "$FILE" IDMMW_PROCESSING_MODE sync
+    require_value "$FILE" KAFKA_ENABLED false
+    require_value "$FILE" REDIS_ENABLED false
+    require_value "$FILE" ADMIN_UI_ENABLED true
+    require_value "$FILE" ADMIN_UI_SERVE_STATIC true
+    require_value "$FILE" ADMIN_AUTH_ENABLED false
+    require_value "$FILE" HTTP_TLS_ENABLED false
+    require_value "$FILE" DebugLogging__Enabled false
+    require_value "$FILE" DebugLogging__Level Basic
+    require_value "$FILE" LOG_SINK stdout
+    require_value "$FILE" ENCRYPTION_ENABLED false
+    DATABASE_URL="file:/tmp/idmmw-profile-validate.db" npx prisma validate --schema=prisma/schema.sqlite.prisma
+    ;;
+  dev-postgres)
+    require_value "$FILE" NODE_ENV production
+    require_value "$FILE" DATABASE_PROVIDER postgresql
+    require_value "$FILE" DATABASE_FLAVOR postgresql
+    require_value "$FILE" LIGHTWEIGHT_MODE false
+    require_value "$FILE" IDMMW_PROCESSING_MODE sync
+    require_value "$FILE" KAFKA_ENABLED false
+    require_value "$FILE" REDIS_ENABLED false
+    require_value "$FILE" ADMIN_UI_ENABLED true
+    require_value "$FILE" ADMIN_UI_SERVE_STATIC true
+    require_value "$FILE" ADMIN_AUTH_ENABLED false
+    require_value "$FILE" HTTP_TLS_ENABLED false
+    require_value "$FILE" DebugLogging__Enabled false
+    require_value "$FILE" DebugLogging__Level Basic
+    require_value "$FILE" LOG_SINK stdout
+    require_value "$FILE" ENCRYPTION_ENABLED false
+    DATABASE_URL="${DATABASE_URL:-postgresql://idmmw:idmmw@localhost:5432/idmmw}" npx prisma validate --schema=prisma/schema.prisma
     ;;
   prod-ha-yugabyte)
     require_value "$FILE" DATABASE_PROVIDER postgresql

@@ -1,7 +1,10 @@
 # Deployment view
 
-idmMw has three documented deployment profiles:
+idmMw has five documented deployment profiles:
 
+- `dev-sqlite` - default administrator-facing DEV profile; prebuilt image,
+  SQLite volume, no Kafka/Redis.
+- `dev-postgres` - DEV APP + PostgreSQL compose profile with prebuilt app image.
 - `sqlite-test` - one worker, SQLite, no Kafka/Redis; CI smoke and disposable
   stands only.
 - `prod-ha-yugabyte` - production HA default; external Kafka and YugabyteDB
@@ -11,6 +14,8 @@ idmMw has three documented deployment profiles:
 
 Detailed operator commands live in
 [../DEPLOYMENT_PROFILES.md](../DEPLOYMENT_PROFILES.md).
+Administrator container handoff lives in
+[../CONTAINER_DEPLOYMENT_ADMIN_GUIDE.md](../CONTAINER_DEPLOYMENT_ADMIN_GUIDE.md).
 
 ## sqlite-test profile
 

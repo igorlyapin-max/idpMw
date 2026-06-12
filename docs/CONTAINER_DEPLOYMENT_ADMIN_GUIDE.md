@@ -1,0 +1,228 @@
+# Container deployment admin guide
+
+This guide is the handoff document for unix administrators who deploy idmMw as
+containers with prebuilt images, `.env` files and secrets resolved through PAM.
+
+## Delivery artifacts
+
+| Scenario              | Compose file                         | Env template                                | Image tag                         |
+| --------------------- | ------------------------------------ | ------------------------------------------- | --------------------------------- |
+| Default DEV, SQLite   | `deploy/docker-compose.dev-sqlite.yml`   | `deploy/profiles/dev-sqlite.env.example`    | `REPLACE_REGISTRY/idmmw:dev-sqlite` |
+| DEV APP + PostgreSQL  | `deploy/docker-compose.dev-postgres.yml` | `deploy/profiles/dev-postgres.env.example`  | `REPLACE_REGISTRY/idmmw:dev-postgres` |
+| HA, YugabyteDB YSQL   | `deploy/docker-compose.prod-ha.yml`      | `deploy/profiles/prod-ha-yugabyte.env.example` | `REPLACE_REGISTRY/idmmw:ha-yugabyte` |
+| HA, CockroachDB       | `deploy/docker-compose.prod-ha.yml`      | `deploy/profiles/prod-ha-cockroach.env.example` | `REPLACE_REGISTRY/idmmw:ha-cockroach` |
+
+`deploy/docker-compose.sqlite-test.yml` and
+`deploy/profiles/sqlite-test.env.example` remain CI/disposable smoke artifacts,
+not the administrator-facing default.
+
+## Build and push images
+
+Build images once in CI or on a controlled build host, then push them to the
+corporate registry. Runtime hosts should use `image:`, not `build:`.
+
+```bash
+docker build \
+  --build-arg PRISMA_SCHEMA=prisma/schema.sqlite.prisma \
+  -t REPLACE_REGISTRY/idmmw:dev-sqlite .
+docker push REPLACE_REGISTRY/idmmw:dev-sqlite
+
+docker build \
+  --build-arg PRISMA_SCHEMA=prisma/schema.prisma \
+  -t REPLACE_REGISTRY/idmmw:dev-postgres .
+docker push REPLACE_REGISTRY/idmmw:dev-postgres
+
+docker build \
+  --build-arg PRISMA_SCHEMA=prisma/schema.prisma \
+  -t REPLACE_REGISTRY/idmmw:ha-yugabyte .
+docker push REPLACE_REGISTRY/idmmw:ha-yugabyte
+
+docker build \
+  --build-arg PRISMA_SCHEMA=prisma/schema.cockroach.prisma \
+  -t REPLACE_REGISTRY/idmmw:ha-cockroach .
+docker push REPLACE_REGISTRY/idmmw:ha-cockroach
+```
+
+The Prisma schema is selected at image build time. Do not reuse a SQLite image
+for PostgreSQL/Yugabyte/Cockroach runtime, and do not reuse a Cockroach image
+for Yugabyte.
+
+## Default DEV deployment: SQLite
+
+Use this profile as the default small DEV contour when no external database is
+allocated. It stores the SQLite database in a Docker volume.
+
+```bash
+cp deploy/profiles/dev-sqlite.env.example deploy/profiles/dev-sqlite.env
+```
+
+Edit `deploy/profiles/dev-sqlite.env`:
+
+- replace `REPLACE_REGISTRY` in `IDMMW_IMAGE`;
+- keep `IDMMW_HOST_PORT=3010` unless the DEV host already uses the port;
+- keep `PORT=3010` inside the container because the image healthcheck uses it;
+- keep `DebugLogging__Enabled=false` by default.
+
+Initialize the SQLite schema once:
+
+```bash
+docker compose \
+  --env-file deploy/profiles/dev-sqlite.env \
+  -f deploy/docker-compose.dev-sqlite.yml \
+  --profile init run --rm idmmw-db-init
+```
+
+Start the application:
+
+```bash
+docker compose \
+  --env-file deploy/profiles/dev-sqlite.env \
+  -f deploy/docker-compose.dev-sqlite.yml \
+  up -d idmmw
+```
+
+Check the runtime:
+
+```bash
+curl -fsS http://127.0.0.1:3010/health
+curl -fsS http://127.0.0.1:3010/metrics
+```
+
+## DEV deployment: APP + PostgreSQL
+
+Use this profile when the DEV contour must mirror a PostgreSQL-compatible DB
+topology while still running the database in compose.
+
+```bash
+cp deploy/profiles/dev-postgres.env.example deploy/profiles/dev-postgres.env
+```
+
+Edit `deploy/profiles/dev-postgres.env`:
+
+- replace `REPLACE_REGISTRY` in `IDMMW_IMAGE`;
+- keep local defaults `IDMMW_HOST_PORT=3010` and `POSTGRES_HOST_PORT=5433`
+  unless the DEV host already uses these ports;
+- for a real shared DEV host, replace `POSTGRES_PASSWORD` and the password part
+  of `DATABASE_URL` with the same generated value.
+
+Apply migrations:
+
+```bash
+docker compose \
+  --env-file deploy/profiles/dev-postgres.env \
+  -f deploy/docker-compose.dev-postgres.yml \
+  --profile init run --rm idmmw-db-init
+```
+
+Start APP + DB:
+
+```bash
+docker compose \
+  --env-file deploy/profiles/dev-postgres.env \
+  -f deploy/docker-compose.dev-postgres.yml \
+  up -d
+```
+
+Check:
+
+```bash
+curl -fsS http://127.0.0.1:3010/health
+curl -fsS http://127.0.0.1:3010/metrics
+```
+
+## HA deployment
+
+HA profiles expect external YugabyteDB or CockroachDB, external Kafka, and a
+reverse proxy or orchestrator in front of application workers. The compose file
+uses `expose: 3010`; publish host ports in the platform layer when needed.
+
+For YugabyteDB:
+
+```bash
+cp deploy/profiles/prod-ha-yugabyte.env.example deploy/profiles/prod-ha-yugabyte.env
+```
+
+For CockroachDB:
+
+```bash
+cp deploy/profiles/prod-ha-cockroach.env.example deploy/profiles/prod-ha-cockroach.env
+```
+
+In the copied file:
+
+- replace `REPLACE_REGISTRY`, DB hostnames and every `REPLACE_WITH_*` value;
+- use `secret://...` or `aapm://...` values for secrets managed by PAM;
+- keep `ENCRYPTION_ENABLED=true` before storing connector secrets;
+- keep `ADMIN_AUTH_ENABLED=true` for `/admin/*`;
+- keep `DebugLogging__Enabled=false` by default.
+
+Run migrations before normal startup:
+
+```bash
+docker compose \
+  --env-file deploy/profiles/prod-ha-yugabyte.env \
+  -f deploy/docker-compose.prod-ha.yml \
+  --profile migrate run --rm idmmw-migrate
+```
+
+Start a worker:
+
+```bash
+docker compose \
+  --env-file deploy/profiles/prod-ha-yugabyte.env \
+  -f deploy/docker-compose.prod-ha.yml \
+  up -d idmmw
+```
+
+For CockroachDB, use `deploy/profiles/prod-ha-cockroach.env`; the profile sets
+`PRISMA_SCHEMA=prisma/schema.cockroach.prisma`.
+
+## Secrets and PAM
+
+Production and shared DEV contours should use PAM instead of plaintext secrets.
+The app resolves secret references during startup when these variables are set:
+
+```env
+SECRETS_PROVIDER=IndeedPamAapm
+SECRETS_INDEEDPAMAAPM_BASEURL=https://pam.company.local
+SECRETS_INDEEDPAMAAPM_APPLICATIONTOKEN=<platform-injected-pam-token>
+SECRETS_INDEEDPAMAAPM_DEFAULTACCOUNTPATH=default/path
+```
+
+Examples of secret-backed runtime values:
+
+```env
+ADMIN_AUTH_LOCAL_PASSWORD=secret://idmmw-admin-password
+ADMIN_AUTH_SESSION_SECRET=secret://idmmw-admin-session-secret
+ENCRYPTION_KEY_KEY_2026_06=secret://idmmw-encryption-key-2026-06
+```
+
+`secret://...` must be the whole env value. Do not embed a `secret://` fragment
+inside `DATABASE_URL`. For the supplied `idmmw-migrate` one-shot service,
+`DATABASE_URL` must already contain a resolved DSN because Prisma CLI does not
+run the application PAM resolver. Let the platform inject the final DSN before
+container startup, or render it from PAM outside the container. PAM bootstrap
+credentials such as `SECRETS_INDEEDPAMAAPM_APPLICATIONTOKEN` must also be
+injected by the platform and cannot be resolved through the same PAM resolver.
+
+## Debug and logging contract
+
+- `DebugLogging__Enabled=false` is the default for all administrator-facing
+  profiles.
+- `DebugLogging__Level=Basic` is safe for temporary routing diagnostics.
+- `DebugLogging__Level=Verbose` is only for time-bound incident diagnostics;
+  payloads are redacted through the structured logging pipeline.
+- stdout/stderr are always active.
+- `LOG_SINK=file` adds a second JSON sink at `LOG_FILE_PATH`; use it only when
+  a collector, sidecar, syslog driver, ELK/OpenSearch route or equivalent
+  platform log route picks up the file.
+
+## Acceptance checklist
+
+- `docker compose config` succeeds for the selected compose/env pair.
+- DB init or migration one-shot completes successfully.
+- App container starts without restart loops.
+- `/health` returns success.
+- `/metrics` exposes Prometheus metrics.
+- Admin UI is reachable when `ADMIN_UI_ENABLED=true`.
+- No real secrets are stored in committed env templates.

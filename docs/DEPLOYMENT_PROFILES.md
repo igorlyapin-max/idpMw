@@ -1,8 +1,12 @@
 # Deployment profiles
 
-idmMw ships two operational deployment profiles and one alternative production
-DB profile:
+idmMw ships administrator-facing container profiles, one CI smoke profile and
+two HA DB profiles:
 
+- `dev-sqlite` - default small DEV contour; one worker, SQLite in a Docker
+  volume, no Kafka/Redis.
+- `dev-postgres` - DEV contour with APP + PostgreSQL in compose; local ports
+  `3010` and `5433`.
 - `sqlite-test` - one worker, SQLite, no Kafka/Redis; for CI smoke and
   disposable test stands only.
 - `prod-ha-yugabyte` - production HA default; external Kafka and YugabyteDB
@@ -26,6 +30,92 @@ Why:
 
 CockroachDB remains supported as a compatibility profile, not the default.
 
+Detailed administrator handoff for image build/push, `.env` preparation, PAM
+secrets and runtime checks lives in
+[CONTAINER_DEPLOYMENT_ADMIN_GUIDE.md](CONTAINER_DEPLOYMENT_ADMIN_GUIDE.md).
+
+## dev-sqlite
+
+Profile files:
+
+- `deploy/profiles/dev-sqlite.env.example`
+- `deploy/docker-compose.dev-sqlite.yml`
+
+Runtime contract:
+
+```env
+DATABASE_PROVIDER=sqlite
+DATABASE_URL=file:/app/data/idmmw.db
+LIGHTWEIGHT_MODE=true
+IDMMW_PROCESSING_MODE=sync
+KAFKA_ENABLED=false
+REDIS_ENABLED=false
+ADMIN_UI_ENABLED=true
+DebugLogging__Enabled=false
+DebugLogging__Level=Basic
+LOG_SINK=stdout
+```
+
+Build/push the image:
+
+```bash
+docker build \
+  --build-arg PRISMA_SCHEMA=prisma/schema.sqlite.prisma \
+  -t REPLACE_REGISTRY/idmmw:dev-sqlite .
+docker push REPLACE_REGISTRY/idmmw:dev-sqlite
+```
+
+Run:
+
+```bash
+cp deploy/profiles/dev-sqlite.env.example deploy/profiles/dev-sqlite.env
+# edit deploy/profiles/dev-sqlite.env and replace REPLACE_* values
+
+docker compose --env-file deploy/profiles/dev-sqlite.env \
+  -f deploy/docker-compose.dev-sqlite.yml \
+  --profile init run --rm idmmw-db-init
+
+docker compose --env-file deploy/profiles/dev-sqlite.env \
+  -f deploy/docker-compose.dev-sqlite.yml up -d idmmw
+```
+
+## dev-postgres
+
+Profile files:
+
+- `deploy/profiles/dev-postgres.env.example`
+- `deploy/docker-compose.dev-postgres.yml`
+
+Runtime contract:
+
+```env
+DATABASE_PROVIDER=postgresql
+DATABASE_FLAVOR=postgresql
+DATABASE_URL=postgresql://idmmw:idmmw_dev@postgres:5432/idmmw
+LIGHTWEIGHT_MODE=false
+IDMMW_PROCESSING_MODE=sync
+KAFKA_ENABLED=false
+REDIS_ENABLED=false
+ADMIN_UI_ENABLED=true
+DebugLogging__Enabled=false
+DebugLogging__Level=Basic
+LOG_SINK=stdout
+```
+
+Run:
+
+```bash
+cp deploy/profiles/dev-postgres.env.example deploy/profiles/dev-postgres.env
+# edit deploy/profiles/dev-postgres.env and replace REPLACE_* values
+
+docker compose --env-file deploy/profiles/dev-postgres.env \
+  -f deploy/docker-compose.dev-postgres.yml \
+  --profile init run --rm idmmw-db-init
+
+docker compose --env-file deploy/profiles/dev-postgres.env \
+  -f deploy/docker-compose.dev-postgres.yml up -d
+```
+
 ## sqlite-test
 
 Profile files:
@@ -47,7 +137,7 @@ DebugLogging__Level=Verbose
 LOG_SINK=file
 ```
 
-Run locally:
+Run locally for CI-style smoke:
 
 ```bash
 docker compose -f deploy/docker-compose.sqlite-test.yml up --build
@@ -90,19 +180,22 @@ Build image:
 ```bash
 docker build \
   --build-arg PRISMA_SCHEMA=prisma/schema.prisma \
-  -t idmmw:prod-ha-yugabyte .
+  -t REPLACE_REGISTRY/idmmw:ha-yugabyte .
+docker push REPLACE_REGISTRY/idmmw:ha-yugabyte
 ```
 
 Run one instance with compose template:
 
 ```bash
-cp deploy/profiles/prod-ha-yugabyte.env.example deploy/profiles/prod-ha.env
-# edit deploy/profiles/prod-ha.env and replace every REPLACE_* value
+cp deploy/profiles/prod-ha-yugabyte.env.example deploy/profiles/prod-ha-yugabyte.env
+# edit deploy/profiles/prod-ha-yugabyte.env and replace every REPLACE_* value
 
-IDMMW_IMAGE=idmmw:prod-ha-yugabyte \
-IDMMW_ENV_FILE=./profiles/prod-ha.env \
-PRISMA_SCHEMA=prisma/schema.prisma \
-docker compose -f deploy/docker-compose.prod-ha.yml up -d --build
+docker compose --env-file deploy/profiles/prod-ha-yugabyte.env \
+  -f deploy/docker-compose.prod-ha.yml \
+  --profile migrate run --rm idmmw-migrate
+
+docker compose --env-file deploy/profiles/prod-ha-yugabyte.env \
+  -f deploy/docker-compose.prod-ha.yml up -d idmmw
 ```
 
 For multiple workers, run the same image and env behind an external reverse
@@ -121,7 +214,8 @@ Build image with Cockroach Prisma schema:
 ```bash
 docker build \
   --build-arg PRISMA_SCHEMA=prisma/schema.cockroach.prisma \
-  -t idmmw:prod-ha-cockroach .
+  -t REPLACE_REGISTRY/idmmw:ha-cockroach .
+docker push REPLACE_REGISTRY/idmmw:ha-cockroach
 ```
 
 Validate without live CockroachDB:

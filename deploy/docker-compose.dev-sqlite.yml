@@ -1,0 +1,47 @@
+services:
+  idmmw-db-init:
+    image: ${IDMMW_IMAGE:-REPLACE_REGISTRY/idmmw:dev-sqlite}
+    container_name: ${IDMMW_INIT_CONTAINER_NAME:-idmmw-dev-sqlite-db-init}
+    env_file:
+      - ${IDMMW_ENV_FILE:-./profiles/dev-sqlite.env.example}
+    command:
+      [
+        'npx',
+        'prisma',
+        'db',
+        'push',
+        '--schema=prisma/schema.sqlite.prisma',
+        '--skip-generate',
+      ]
+    volumes:
+      - idmmw_sqlite_data:/app/data
+    profiles:
+      - init
+
+  idmmw:
+    image: ${IDMMW_IMAGE:-REPLACE_REGISTRY/idmmw:dev-sqlite}
+    container_name: ${IDMMW_CONTAINER_NAME:-idmmw-dev-sqlite}
+    env_file:
+      - ${IDMMW_ENV_FILE:-./profiles/dev-sqlite.env.example}
+    ports:
+      - '${IDMMW_HOST_PORT:-3010}:3010'
+    volumes:
+      - idmmw_sqlite_data:/app/data
+      - idmmw_logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3010/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  idmmw_sqlite_data:
+  idmmw_logs:

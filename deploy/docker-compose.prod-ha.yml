@@ -1,11 +1,20 @@
 services:
+  idmmw-migrate:
+    image: ${IDMMW_IMAGE:-REPLACE_REGISTRY/idmmw:ha-yugabyte}
+    env_file:
+      - ${IDMMW_ENV_FILE:-./profiles/prod-ha-yugabyte.env.example}
+    command:
+      [
+        'sh',
+        '-c',
+        'npx prisma migrate deploy --schema "$${PRISMA_SCHEMA:-prisma/schema.prisma}"',
+      ]
+    restart: 'no'
+    profiles:
+      - migrate
+
   idmmw:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-      args:
-        PRISMA_SCHEMA: ${PRISMA_SCHEMA:-prisma/schema.prisma}
-    image: ${IDMMW_IMAGE:-idmmw:prod-ha}
+    image: ${IDMMW_IMAGE:-REPLACE_REGISTRY/idmmw:ha-yugabyte}
     env_file:
       - ${IDMMW_ENV_FILE:-./profiles/prod-ha-yugabyte.env.example}
     expose:
